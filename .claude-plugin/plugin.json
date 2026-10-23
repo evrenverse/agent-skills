@@ -1,0 +1,13 @@
+{
+  "name": "team-skills",
+  "description": "Skills for working with paseo agents: hand a plan to an implementer, spawn standalone agents, get second opinions and committee analysis, take over interrupted work, read agent transcripts, profile runs, resume after usage limits, and review specs and plans.",
+  "author": {
+    "name": "Evren Tiras",
+    "url": "https://github.com/evrenverse"
+  },
+  "homepage": "https://github.com/evrenverse/agent-skills",
+  "repository": "https://github.com/evrenverse/agent-skills",
+  "license": "MIT",
+  "keywords": ["paseo", "agents", "subagents", "handoff", "takeover", "claude-code", "codex"],
+  "icon": "./icon.svg"
+}

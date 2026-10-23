@@ -1,0 +1,11 @@
+#!/usr/bin/env python3
+"""Entry point of paseo-limit-watch: the code is in lib/paseo_tools/limit_watch.py."""
+
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
+
+from paseo_tools import limit_watch
+
+raise SystemExit(limit_watch.main())

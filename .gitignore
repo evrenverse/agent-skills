@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.ruff_cache/
+.venv/
+.DS_Store
+# Claude Code: personal permission grants and its own worktrees
+.claude/settings.local.json
+.claude/worktrees/

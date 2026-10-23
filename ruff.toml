@@ -1,0 +1,7 @@
+target-version = "py310"
+line-length = 110
+extend-include = ["bin/*"]
+src = ["lib", "."]
+
+[lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]

@@ -1,0 +1,16 @@
+{
+  "name": "evrenverse",
+  "description": "Skills for working with paseo agents.",
+  "owner": {
+    "name": "Evren Tiras",
+    "url": "https://github.com/evrenverse"
+  },
+  "plugins": [
+    {
+      "name": "team-skills",
+      "description": "Handoff, spawn, second opinions, takeover, transcript reading, run profiling, resuming after limits, and spec-and-plan review for paseo agents.",
+      "source": "./",
+      "category": "productivity"
+    }
+  ]
+}

@@ -1,0 +1,88 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Read-only token for every job; nothing here needs more, and no job uses a secret.
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.x" # ruff and the JSON check do not depend on the interpreter version
+      - run: pip install ruff==0.14.5
+      - run: ruff check .
+      - run: ruff format --check .
+      # shellcheck comes preinstalled on the Ubuntu runner images.
+      - run: shellcheck install.sh
+      - name: Every JSON file parses
+        run: |
+          bad=0
+          for f in $(git ls-files '*.json'); do
+            python3 -m json.tool "$f" > /dev/null || { echo "invalid JSON: $f"; bad=1; }
+          done
+          exit "$bad"
+
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        # The minimum the project supports and the newest stable release; raise the latter when a new minor ships.
+        python-version: ["3.10", "3.15"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ matrix.python-version }}
+      # Also covers the SKILL.md rules (name equals folder, description) in tests/test_skills.py.
+      - run: python -m unittest discover -s tests -t .
+
+  plugin:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: lts/*
+      - run: npm install --global @anthropic-ai/claude-code@2.1.309
+      # Exit code 1 on errors, 0 on warnings only: the expected missing-`version` warnings do not fail the job.
+      - run: claude plugin validate .
+
+  secrets:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # The release binary, not gitleaks-action: the action has its own license terms and scans only the commit range
+      # of the event, while this scans every commit.
+      - name: Install gitleaks
+        env:
+          GITLEAKS_VERSION: 8.30.1
+          GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+        run: |
+          archive="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl --fail --silent --show-error --location --output "$RUNNER_TEMP/$archive" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${archive}"
+          echo "${GITLEAKS_SHA256}  $RUNNER_TEMP/$archive" | sha256sum --check -
+          tar --extract --gzip --file "$RUNNER_TEMP/$archive" --directory "$RUNNER_TEMP" gitleaks
+      - run: '"$RUNNER_TEMP/gitleaks" git --redact --verbose --no-banner .'
