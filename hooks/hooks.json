@@ -1,0 +1,18 @@
+{
+  "description": "Heavy test runs in Bash calls go through test-queue (sessions in bypassPermissions mode only).",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/bin/test-queue", "hook"],
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

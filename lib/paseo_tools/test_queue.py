@@ -2,6 +2,7 @@
 
     test-queue run [--label L] [--last] -- <command…>   wait for a slot, run the command holding it
     test-queue status                                   who holds a slot and who waits, in queue order
+    test-queue hook                                     Claude Code PreToolUse hook (payload on stdin)
 
 Agents and hourly CIs of several repositories share one machine. Heavy suites that run side by side overload
 its CPU and database: together they take longer than one after another, and timing tests and connection limits
@@ -22,6 +23,12 @@ plus `TEST_QUEUE_SLOT=<label>`; SIGTERM, SIGINT and SIGHUP are passed on to that
 `TEST_QUEUE_SLOT` already set runs at once, without a slot or a ticket: a check that starts a suite inside a
 held slot must not wait for a second one.
 
+The hook (hooks/hooks.json) sends a Bash call whose command matches one of the `patterns` through `run`, in
+a session in bypassPermissions mode only: its `allow` would skip the permission prompt of any other mode. The
+rewritten call is `test-queue run … -- bash -c '<command>'`, and a foreground call gets the Bash tool's
+longest timeout, since the wait in the queue counts against it. Any error means no output: the call runs as
+it was.
+
 State: $TEST_QUEUE_DIR, else $XDG_STATE_HOME/test-queue, else ~/.local/state/test-queue. Configuration:
 $XDG_CONFIG_HOME/test-queue/config.json, else ~/.config/test-queue/config.json; a missing or broken file means
 the defaults.
@@ -30,6 +37,9 @@ WHAT IT DOES NOT DO
   - Stop the command when the call itself is SIGKILLed: the slot frees with the call, and the command, in its
     own session, runs on outside the queue.
   - Keep the slot for what the command leaves behind: a daemon it starts inherits no lock.
+  - Wrap a call by what it does: `patterns` match the command's text, so a script that runs a suite is not
+    heavy to the hook, and `echo "bun run check"` is. A wrapped command runs in a new `bash -c`, without the
+    session's shell functions and aliases.
 """
 
 from __future__ import annotations
@@ -39,6 +49,7 @@ import contextlib
 import fcntl
 import json
 import os
+import re
 import shlex
 import signal
 import subprocess
@@ -46,8 +57,10 @@ import sys
 import time
 from dataclasses import asdict, dataclass, field, fields, replace
 from pathlib import Path
+from typing import Any
 
 POLL = 1.0  # seconds between a waiting call's checks
+BASH_TIMEOUT_MAX_MS = 600_000  # the Bash tool's longest timeout
 FORWARDED = (signal.SIGTERM, signal.SIGINT, signal.SIGHUP)
 
 
@@ -315,7 +328,7 @@ def run(command: list[str], label: str, last: bool = False, config: Config | Non
 
 
 def main(argv: list[str] | None = None) -> int:
-    """The command line: `run` and `status`."""
+    """The command line: `run`, `status` and `hook`."""
     parser = argparse.ArgumentParser(
         prog="test-queue", description="One machine-wide queue for heavy test runs."
     )
@@ -331,7 +344,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     run_parser.add_argument("command", nargs=argparse.REMAINDER, help="the command, after --")
     actions.add_parser("status", help="who holds a slot and who waits, in queue order")
+    actions.add_parser("hook", help="PreToolUse hook: read the payload on stdin, print the rewritten call")
     args = parser.parse_args(argv)
+
+    if args.action == "hook":
+        return _hook_command()
 
     if args.action == "status":
         holders, waiters = status()
@@ -350,4 +367,62 @@ def main(argv: list[str] | None = None) -> int:
 
 # The hook
 
-DEFAULT_PATTERNS: list[str] = []
+# Regular expressions searched in the whole command. A suite is heavy; one file's run is not. Everything is
+# textual: a false positive only queues, and a heavy run in an unusual spelling is missed (extend `patterns`).
+DEFAULT_PATTERNS: list[str] = [
+    # A package script that runs a suite: `bun run check`, `pnpm run test:changed`, `bun run --cwd web test`.
+    # `ci:status` and `check:fast` are other scripts, so no `:` may follow `check`, `ci` or `e2e`.
+    r"\b(?:bun|npm|pnpm|yarn)\s+run\s+(?:--[\w-]+(?:=\S+|\s+\S+)?\s+)*"
+    r"(?:check|ci|e2e|test(?::[\w:-]+)?)(?![\w:-])",
+    r"\b(?:npm|pnpm|yarn)\s+test(?![\w:-])",
+    # `turbo run typecheck test --affected`: `test` among the task names, which are words, not flags.
+    r"\bturbo\s+(?:run\s+)?(?:[\w:-]+\s+)*?test(?![\w-])",
+    # A runner without a file argument runs everything; only flags (`-x`, `--bail`) may follow it.
+    r"\b(?:vitest(?:\s+run)?|playwright\s+test|pytest)(?:\s+-\S*)*\s*(?=$|[;&|<>()\n]|\d[<>])",
+]
+
+
+def is_heavy(command: str, patterns: list[str]) -> bool:
+    """Whether one of the regular expressions `patterns` is found in `command`."""
+    return any(re.search(pattern, command) for pattern in patterns)
+
+
+def wrap(command: str, label: str, executable: str) -> str:
+    """`command` as a call of `executable run`, which runs it in `bash -c` holding a slot."""
+    return f"{shlex.quote(executable)} run --label {shlex.quote(label)} -- bash -c {shlex.quote(command)}"
+
+
+def hook(payload: Any, config: Config, executable: str) -> dict[str, Any] | None:
+    """The PreToolUse answer for a Bash call that is heavy and in a bypassPermissions session, else None.
+
+    Any error, a malformed payload or a broken pattern included, gives None: the call runs as it was.
+    """
+    with contextlib.suppress(Exception):  # this runs before every Bash call and must never fail one
+        if payload["permission_mode"] != "bypassPermissions" or payload["tool_name"] != "Bash":
+            return None
+        tool_input = payload["tool_input"]
+        command = tool_input["command"]
+        queued = command.startswith((executable, shlex.quote(executable)))
+        if queued or not is_heavy(command, config.patterns):
+            return None
+        updated = {**tool_input, "command": wrap(command, default_label(payload["cwd"], command), executable)}
+        if not tool_input.get("run_in_background") and (tool_input.get("timeout") or 0) < BASH_TIMEOUT_MAX_MS:
+            updated["timeout"] = BASH_TIMEOUT_MAX_MS
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "allow",
+                "updatedInput": updated,
+            }
+        }
+    return None
+
+
+def _hook_command() -> int:
+    """`test-queue hook`: the payload from stdin, the answer (if any) as JSON on stdout; exit code 0."""
+    with contextlib.suppress(Exception):  # nothing on stderr either: the tool call stays quiet
+        executable = str(Path(__file__).resolve().parents[2] / "bin" / "test-queue")
+        result = hook(json.loads(sys.stdin.read()), load_config(), executable)
+        if result is not None:
+            print(json.dumps(result))
+    return 0
