@@ -39,7 +39,7 @@ from paseo_tools.limits import Blocker
 GRACE = timedelta(minutes=1)
 RETRY_AFTER = timedelta(minutes=30)
 MAX_TRIES = 3
-RELOAD_MIN_WAIT = timedelta(minutes=30)
+RELOAD_MIN_WAIT = timedelta(minutes=45)
 RESUME_LINE = (
     "Continue where you left off — unless you already did after the limit reset; then ignore this message."
 )
@@ -468,7 +468,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--reload",
         action="store_true",
-        help="restart a Claude agent launched through claude-rotate whose reset is over 30 minutes away "
+        help="restart a Claude agent launched through claude-rotate whose reset is over 45 minutes away "
         "when another account is free, then resume it",
     )
     args = parser.parse_args(argv)
