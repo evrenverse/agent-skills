@@ -14,8 +14,8 @@ from unittest import mock
 class TempHome(unittest.TestCase):
     """Base class that points HOME at a temporary directory (`self.home`).
 
-    Also clears XDG_STATE_HOME and CLAUDE_CONFIG_DIR: both would lead a test to the real state or Claude
-    config directory.
+    Also clears XDG_STATE_HOME, XDG_CONFIG_HOME and CLAUDE_CONFIG_DIR: each would lead a test to the real
+    state, configuration or Claude config directory.
     """
 
     def setUp(self) -> None:
@@ -27,6 +27,7 @@ class TempHome(unittest.TestCase):
         self.addCleanup(env.stop)
         # patch.dict puts them back on stop.
         os.environ.pop("XDG_STATE_HOME", None)
+        os.environ.pop("XDG_CONFIG_HOME", None)
         os.environ.pop("CLAUDE_CONFIG_DIR", None)
 
 
