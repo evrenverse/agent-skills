@@ -11,9 +11,11 @@ the command holding it and exits with the command's code, 128 + the signal when 
 A slot is a lock file held with flock(2) for the command's whole life, so the kernel frees it when its holder
 dies, SIGKILL included; the holder's label, directory and start sit beside it in `slot-<i>.json`, which counts
 only while the lock is held. A waiting call leaves a ticket `waiting/<pid>.json`, checks every second and
-takes a free slot only when fewer calls are ahead of it than slots are free; the ticket of a call whose
-process is gone is dropped. `--last` (for cron lines) lets every other waiter go first until it has waited
-`last_wait_max_s` seconds.
+takes a free slot only when fewer calls are ahead of it than slots are free. It holds the lock of
+`waiting/<pid>.lock` from before the ticket exists until after it is gone, so the same rule holds: a ticket
+whose lock is free is dead and dropped, whatever process has its pid now. SIGTERM, SIGINT and SIGHUP during
+the wait remove the ticket and end the call with 128 + the signal. `--last` (for cron lines) lets every other
+waiter go first until it has waited `last_wait_max_s` seconds.
 
 The command runs in its own session, so its process group is its own, with the call's streams and environment
 plus `TEST_QUEUE_SLOT=<label>`; SIGTERM, SIGINT and SIGHUP are passed on to that group. A call with
@@ -115,15 +117,39 @@ def _read(path: Path) -> Entry | None:
         return None
 
 
-def _alive(pid: int) -> bool:
-    """Whether process `pid` exists."""
+def _current(path: Path, fd: int) -> bool:
+    """Whether `path` still names the file open as `fd`: a reader removes a dead ticket's lock file."""
     try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
+        return os.stat(path).st_ino == os.fstat(fd).st_ino
+    except FileNotFoundError:
         return False
-    except PermissionError:  # another user's process
-        pass
-    return True
+
+
+def _hold(path: Path) -> int:
+    """Lock `path`, made if missing, and return its descriptor; again if a reader removed it meanwhile."""
+    while True:
+        fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        if _current(path, fd):
+            return fd
+        os.close(fd)
+
+
+def _gone(ticket: Path) -> bool:
+    """Whether the waiter of `ticket` is gone, its lock free; then its ticket and lock file are removed."""
+    lock = ticket.with_suffix(".lock")
+    fd = os.open(lock, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        if not _current(lock, fd):  # another reader removed it first
+            return False
+        ticket.unlink(missing_ok=True)
+        lock.unlink()
+        return True
+    except BlockingIOError:
+        return False
+    finally:
+        os.close(fd)
 
 
 def _minutes(since: float) -> int:
@@ -165,13 +191,10 @@ def _queue_key(entry: Entry, config: Config, now: float) -> tuple[int, float, in
 
 
 def _waiters(config: Config) -> list[Entry]:
-    """The waiting calls in queue order; the ticket of a call whose process is gone is removed."""
+    """The waiting calls in queue order; a dead ticket is removed."""
     entries = []
     for path in (state_dir() / "waiting").glob("*.json"):
-        entry = _read(path)
-        if entry is None or not _alive(entry.pid):
-            path.unlink(missing_ok=True)
-        else:
+        if not _gone(path) and (entry := _read(path)) is not None:
             entries.append(entry)
     now = time.time()
     return sorted(entries, key=lambda entry: _queue_key(entry, config, now))
@@ -207,6 +230,33 @@ def _wait(me: Entry, config: Config) -> tuple[int, int]:
             held = ", ".join(f"{h.label} ({h.cwd}) for {_minutes(h.since)} min" for h in holders) or "nobody"
             print(f"test-queue: waiting; held by {held}; {ahead} ahead", file=sys.stderr, flush=True)
         time.sleep(POLL)
+
+
+class _Interrupted(Exception):
+    """A signal that ended the wait; args[0] is its number."""
+
+
+def _interrupt(signum: int, _frame: object) -> None:
+    """The wait's signal handler: end the wait so its ticket goes."""
+    raise _Interrupted(signum)
+
+
+def _queue(me: Entry, config: Config) -> tuple[int, int]:
+    """Wait under a ticket that goes however the wait ends; the slot and the descriptor holding its lock."""
+    ticket = state_dir() / "waiting" / f"{me.pid}.json"
+    ticket.parent.mkdir(parents=True, exist_ok=True)
+    lock = ticket.with_suffix(".lock")
+    fd = _hold(lock)  # before the ticket exists: a ticket whose lock is free is dead
+    previous = {signum: signal.signal(signum, _interrupt) for signum in FORWARDED}
+    try:
+        _write(ticket, me)
+        return _wait(me, config)
+    finally:
+        for signum, handler in previous.items():
+            signal.signal(signum, handler)
+        ticket.unlink(missing_ok=True)
+        lock.unlink(missing_ok=True)  # still locked, so no reader has replaced it
+        os.close(fd)
 
 
 def _execute(command: list[str], label: str) -> int:
@@ -250,18 +300,12 @@ def run(command: list[str], label: str, last: bool = False, config: Config | Non
     if os.environ.get("TEST_QUEUE_SLOT"):
         return _execute(command, label)
     config = config or load_config()
-    state = state_dir()
-    (state / "waiting").mkdir(parents=True, exist_ok=True)
     me = Entry(label, os.getpid(), os.getcwd(), time.time(), last)
-    ticket = state / "waiting" / f"{me.pid}.json"
-    _write(ticket, me)
     try:
-        slot, fd = _wait(me, config)
-    except KeyboardInterrupt:
-        return 128 + signal.SIGINT
-    finally:
-        ticket.unlink(missing_ok=True)
-    holder = state / f"slot-{slot}.json"
+        slot, fd = _queue(me, config)
+    except _Interrupted as stop:
+        return 128 + stop.args[0]
+    holder = state_dir() / f"slot-{slot}.json"
     try:
         _write(holder, replace(me, since=time.time()))
         return _execute(command, label)

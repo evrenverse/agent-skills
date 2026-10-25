@@ -57,7 +57,7 @@ class QueueCase(TempHome):
         return proc
 
     def stop(self, proc: subprocess.Popen[str], name: str) -> None:
-        """End a call: SIGTERM, which it passes on to its command; then any command a SIGKILLed call left."""
+        """End a call: SIGTERM, which it passes on to its command; then kill a command that outlived it."""
         if proc.poll() is None:
             proc.terminate()
             try:
@@ -67,7 +67,7 @@ class QueueCase(TempHome):
                 proc.wait()
         assert proc.stderr is not None
         proc.stderr.close()
-        if proc.returncode == -signal.SIGKILL and (self.marks / f"{name}.start").exists():
+        if (self.marks / f"{name}.start").exists() and not (self.marks / f"{name}.end").exists():
             with contextlib.suppress(ProcessLookupError):
                 os.killpg(self.pid(name), signal.SIGKILL)
 
@@ -138,19 +138,19 @@ class QueueTests(QueueCase):
     def test_last_lets_a_later_waiter_go_first(self) -> None:
         release = self.hold_slot()
         self.ticket(self.start("last", "--last"))
-        self.ticket(self.start("plain"))
+        self.ticket(self.start("plain", seconds=30))  # keeps the only slot, so "last" cannot start after it
         release()
         self.when("plain")
-        self.assertFalse((self.marks / "last.start").exists())  # one slot: the first to start went first
+        self.assertFalse((self.marks / "last.start").exists())
 
     def test_last_queues_normally_after_its_wait(self) -> None:
         write_json(self.home / ".config" / "test-queue" / "config.json", {"last_wait_max_s": 0})
         release = self.hold_slot()
-        self.ticket(self.start("last", "--last"))
+        self.ticket(self.start("last", "--last", seconds=30))  # keeps the only slot once it has it
         self.ticket(self.start("plain"))
         release()
         self.when("last")
-        self.assertFalse((self.marks / "plain.start").exists())  # one slot: the first to start went first
+        self.assertFalse((self.marks / "plain.start").exists())
 
     def test_killed_holder_frees_its_slot(self) -> None:
         # The holder's command runs on after the kill: the slot must free with the call, not with the command.
@@ -165,11 +165,24 @@ class QueueTests(QueueCase):
     def test_dead_waiter_is_dropped(self) -> None:
         gone = subprocess.Popen([sys.executable, "-c", ""])
         gone.wait()
-        ticket = self.state / "waiting" / f"{gone.pid}.json"
+        waiting = self.state / "waiting"
         entry = {"label": "gone", "pid": gone.pid, "cwd": "/", "since": time.time(), "last": False}
-        write_json(ticket, entry)
+        write_json(waiting / f"{gone.pid}.json", entry)
+        # What a SIGKILLed waiter leaves, its pid now taken by a live process (this one): a lock nobody holds.
+        write_json(waiting / f"{os.getpid()}.json", {**entry, "pid": os.getpid()})
+        (waiting / f"{os.getpid()}.lock").touch()
         self.assertEqual(test_queue.status(), ([], []))
-        self.assertFalse(ticket.exists())
+        self.assertEqual(list(waiting.iterdir()), [])
+
+    def test_a_signal_while_waiting_removes_the_ticket(self) -> None:
+        self.hold_slot()
+        for signum in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+            with self.subTest(signal=signum.name):
+                call = self.start(f"waiter-{signum}")
+                self.ticket(call)
+                call.send_signal(signum)
+                self.assertEqual(call.wait(5), 128 + signum)
+                self.assertEqual(list((self.state / "waiting").iterdir()), [])
 
     def test_holder_file_without_its_lock_is_no_holder(self) -> None:
         # What a SIGKILLed holder leaves: the kernel freed its lock, its file stayed.
@@ -177,13 +190,16 @@ class QueueTests(QueueCase):
         write_json(self.state / "slot-0.json", entry)
         self.assertEqual(test_queue.status(), ([], []))
 
-    def test_sigterm_reaches_the_command(self) -> None:
-        call = self.start("victim", seconds=30)
-        self.when("victim")
-        call.terminate()
-        self.assertEqual(call.wait(3), 128 + signal.SIGTERM)
-        with self.assertRaises(ProcessLookupError):
-            os.kill(self.pid("victim"), 0)
+    def test_signals_reach_the_command(self) -> None:
+        for signum in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+            with self.subTest(signal=signum.name):
+                name = f"victim-{signum}"
+                call = self.start(name, seconds=30)
+                self.when(name)
+                call.send_signal(signum)
+                self.assertEqual(call.wait(3), 128 + signum)
+                with self.assertRaises(ProcessLookupError):
+                    os.kill(self.pid(name), 0)
 
     def test_nested_run_runs_at_once(self) -> None:
         self.hold_slot()
