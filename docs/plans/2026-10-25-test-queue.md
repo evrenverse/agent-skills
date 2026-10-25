@@ -22,8 +22,9 @@ The branch differs from the tasks below in these points:
 - **Codex is not wrapped:** its command hooks document no exec-form `args`.
 - **Deny and ask rules.** Claude Code checks its rules against the command the hook returns, where a Bash rule no
   longer matches. So the hook leaves a heavy command alone when a Bash rule of `permissions.deny` or
-  `permissions.ask` in the user or project settings (read with `git rev-parse --show-toplevel`) may match it, and
-  settings it cannot read mean the same. Managed settings and `--disallowedTools` are not read.
+  `permissions.ask` in the user settings or the project settings (under `$CLAUDE_PROJECT_DIR`, the git root and the
+  main checkout's root, which `git rev-parse` finds) may match it, and settings it cannot read mean the same.
+  Managed settings, `--settings` and `--disallowedTools` are not read.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or
 > superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.

@@ -120,9 +120,12 @@ def without(key: str) -> dict[str, Any]:
 class HookCase(TempHome):
     def setUp(self) -> None:
         super().setUp()
-        # The suite may itself run inside a held slot; patch.dict in TempHome puts them back.
-        for name in QUEUE_VARIABLES:
+        # The suite may itself run inside a held slot, a git hook or a Claude Code session; patch.dict in
+        # TempHome puts the variables back. With the ceiling, no git call (the test's or the hook's) reaches
+        # a repository above the temporary home, whatever TMPDIR is.
+        for name in (*QUEUE_VARIABLES, "CLAUDE_PROJECT_DIR", "GIT_DIR", "GIT_WORK_TREE"):
             os.environ.pop(name, None)
+        os.environ["GIT_CEILING_DIRECTORIES"] = str(self.home.parent)
         write_json(test_queue.config_path(), {})  # the hook acts only once the file exists
 
     def decide(self, call: Any, executable: str = EXECUTABLE) -> dict[str, Any] | None:
@@ -426,10 +429,47 @@ class RuleTests(HookCase):
         self.rules("Bash(infisical export *)", at=plain / ".claude" / "settings.json")
         self.assertIsNone(self.decide_in(self.COMMAND, plain))
 
+    def test_worktree_reads_the_main_checkouts_settings(self) -> None:
+        # Claude Code reads settings.local.json at the main checkout's root, also in a worktree.
+        git = ["git", "-c", "user.name=t", "-c", "user.email=t@example.com"]
+        subprocess.run([*git, "commit", "-q", "--allow-empty", "-m", "init"], cwd=self.project, check=True)
+        worktree = self.home / "worktrees" / "topic"
+        subprocess.run(["git", "worktree", "add", "-q", str(worktree)], cwd=self.project, check=True)
+        cwd = worktree / "pkg"
+        cwd.mkdir()
+        self.assertIsNotNone(self.decide_in(self.COMMAND, cwd))
+        for name in ("settings.local.json", "settings.json"):
+            with self.subTest(file=name):
+                self.rules("Bash(infisical export *)", at=self.project / ".claude" / name)
+                self.assertIsNone(self.decide_in(self.COMMAND, cwd))
+                (self.project / ".claude" / name).unlink()
+        self.rules("Bash(infisical export *)", at=worktree / ".claude" / "settings.json")  # its own counts
+        self.assertIsNone(self.decide_in(self.COMMAND, cwd))
+
+    def test_claude_project_dir_is_read(self) -> None:
+        start = self.home / "start"
+        elsewhere = self.home / "elsewhere"
+        elsewhere.mkdir()
+        os.environ["CLAUDE_PROJECT_DIR"] = str(start)
+        self.assertIsNotNone(self.decide_in(self.COMMAND, elsewhere))
+        for name in ("settings.json", "settings.local.json"):
+            with self.subTest(file=name):
+                self.rules("Bash(infisical export *)", at=start / ".claude" / name)
+                self.assertIsNone(self.decide_in(self.COMMAND, elsewhere))
+                (start / ".claude" / name).unlink()
+        self.rules("Bash(infisical export *)", at=start / ".claude" / "settings.json")
+        os.environ["CLAUDE_PROJECT_DIR"] = ""  # empty counts as unset
+        self.assertIsNotNone(self.decide_in(self.COMMAND, elsewhere))
+
     def test_cwd_is_the_root_when_git_fails(self) -> None:
         self.rules("Bash(infisical export *)")  # at the git root, which cannot be found now
-        for failure in (subprocess.TimeoutExpired("git", 2), FileNotFoundError("git")):
-            with self.subTest(failure=failure), mock.patch.object(subprocess, "run", side_effect=failure):
+        odd_output = subprocess.CompletedProcess([], 0, f"{self.project}\n", "")  # one line, not two
+        for failure in (
+            {"side_effect": subprocess.TimeoutExpired("git", 2)},
+            {"side_effect": FileNotFoundError("git")},
+            {"return_value": odd_output},
+        ):
+            with self.subTest(failure=failure), mock.patch.object(subprocess, "run", **failure):
                 self.assertIsNotNone(self.decide_in(self.COMMAND))
                 self.rules("Bash(infisical export *)", at=self.cwd / ".claude" / "settings.json")
                 self.assertIsNone(self.decide_in(self.COMMAND))

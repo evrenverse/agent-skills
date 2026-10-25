@@ -495,27 +495,42 @@ def wrap(command: str, label: str, executable: str) -> str:
     return f"{shlex.quote(executable)} run --label {shlex.quote(label)} -- bash -c {shlex.quote(command)}"
 
 
+def _project_dirs(cwd: str) -> list[Path]:
+    """The directories whose `.claude/settings*.json` Claude Code may read for a session that runs in `cwd`.
+
+    `$CLAUDE_PROJECT_DIR` (the session's start directory) when set, then the git root of `cwd` and the root of
+    the main checkout (they differ in a worktree). When git cannot say, `cwd` itself stands for both.
+    """
+    dirs = [Path(cwd)]
+    try:
+        git = ["git", "-C", cwd, "rev-parse", "--path-format=absolute", "--show-toplevel", "--git-common-dir"]
+        done = subprocess.run(
+            git, capture_output=True, text=True, timeout=2, check=True, stdin=subprocess.DEVNULL
+        )
+        top, common = done.stdout.splitlines()
+        dirs = [Path(top), Path(common).parent]
+    except (OSError, subprocess.SubprocessError, ValueError):
+        pass
+    start = os.environ.get("CLAUDE_PROJECT_DIR")
+    return [Path(start), *dirs] if start else dirs
+
+
 def _bash_specs(cwd: str) -> list[str]:
     """The specs of the Bash rules in `permissions.deny` and `permissions.ask` of the session's settings.
 
     The files are the user's (`$CLAUDE_CONFIG_DIR/settings.json`, else `~/.claude/settings.json`) and the
-    project's `.claude/settings.json` and `.claude/settings.local.json`, under the git root of `cwd` (`cwd`
-    itself when git cannot say). The bare rule `Bash` comes as `*`. A file that does not exist adds nothing;
-    one that is unreadable, not JSON or not shaped like settings raises.
+    `.claude/settings.json` and `.claude/settings.local.json` of each of `_project_dirs(cwd)`: a union, since
+    a rule found anywhere only skips the queue. The bare rule `Bash` comes as `*`. A file that does not exist
+    adds nothing; one that is unreadable, not JSON or not shaped like settings raises.
     """
-    user = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
-    try:
-        git = ["git", "-C", cwd, "rev-parse", "--show-toplevel"]
-        top = subprocess.run(git, capture_output=True, text=True, timeout=2, check=True).stdout.strip()
-        root = Path(top or cwd)
-    except (OSError, subprocess.SubprocessError):
-        root = Path(cwd)
-    project = root / ".claude"
+    files = [Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude") / "settings.json"]
+    for directory in _project_dirs(cwd):
+        files += [directory / ".claude" / "settings.json", directory / ".claude" / "settings.local.json"]
     specs: list[str] = []
-    for path in (user / "settings.json", project / "settings.json", project / "settings.local.json"):
+    for path in dict.fromkeys(files):
         if not path.exists():
             continue
-        permissions = json.loads(path.read_text()).get("permissions", {})
+        permissions = json.loads(path.read_text(encoding="utf-8")).get("permissions", {})
         for kind in ("deny", "ask"):
             rules = permissions.get(kind, [])
             if not isinstance(rules, list):

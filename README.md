@@ -218,20 +218,22 @@ that does not compile is skipped; any other error gives no output, and the call 
   longer, up to two hours. When `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS` is set to anything but `0`, a foreground call
   cannot move to the background; the hook then raises its timeout to ten minutes, the Bash tool's longest, and the call
   ends there if the wait and the run take longer.
-- **Deny and ask rules.** Claude Code checks permission rules against the command the hook returns, and a Bash rule
-  does not match inside `bash -c '…'`; its [permissions page](https://code.claude.com/docs/en/permissions) calls such a
-  rule one that "isn't a security boundary around the program". So the hook leaves a command alone when a Bash deny or
-  ask rule of the session may match it: it runs unqueued, and Claude Code's own rule applies as without the hook. The
-  rules are the `Bash(…)` entries (and a bare `Bash`) of `permissions.deny` and `permissions.ask` in the user settings
-  (`$CLAUDE_CONFIG_DIR/settings.json`, else `~/.claude/settings.json`) and in the project's `.claude/settings.json` and
-  `.claude/settings.local.json`; the project is the git root of the call's working directory, found with
-  `git rev-parse --show-toplevel`, or that directory when git cannot say. The match is wide on purpose, since a false
-  alarm only skips the queue: the text of a rule before its first `*` (a `:*` counts as `*`) found anywhere in the
-  command, behind `&&` or `;`, in `$(…)`, in quotes or in a here-document, is a match; a rule without a `*` must occur
-  whole; `Bash(*)` and a bare `Bash` match every command. A settings file that exists but cannot be read, is not JSON or an object, or whose
-  `deny` or `ask` is not a list also means: do not wrap. **Not read:** managed settings and rules given with
-  `--disallowedTools` on the command line; a wrapped command stays outside those. If you rely on them, do not create
-  the configuration file, or set `"patterns": []` in it: the hook then wraps nothing.
+- **Deny and ask rules.** Claude Code checks permission rules against the command the hook returns, and a Bash rule does
+  not match inside `bash -c '…'`; its [permissions page](https://code.claude.com/docs/en/permissions) calls such a rule
+  one that "isn't a security boundary around the program". So the hook leaves a command alone when a Bash deny or ask
+  rule of the session may match it: it runs unqueued, and Claude Code's own rule applies as without the hook. The rules
+  are the `Bash(…)` entries (and a bare `Bash`) of `permissions.deny` and `permissions.ask` in the user settings
+  (`$CLAUDE_CONFIG_DIR/settings.json`, else `~/.claude/settings.json`) and in the `.claude/settings.json` and
+  `.claude/settings.local.json` under each of these directories: `$CLAUDE_PROJECT_DIR`, the session's start directory,
+  when it is set; the git root of the call's working directory; and the main checkout's root, which differs from that
+  git root in a worktree (both roots come from one `git rev-parse` call, and when git cannot say, the working directory
+  itself stands in). The match is wide on purpose, since a false alarm only skips the queue: the text of a rule before
+  its first `*` (a `:*` counts as `*`) found anywhere in the command, behind `&&` or `;`, in `$(…)`, in quotes or in a
+  here-document, is a match; a rule without a `*` must occur whole; `Bash(*)` and a bare `Bash` match every command. A
+  settings file that exists but cannot be read, is not JSON or an object, or whose `deny` or `ask` is not a list also
+  means: do not wrap. **Not read:** managed settings, rules passed with `--settings` and rules passed with
+  `--disallowedTools` on the command line; a wrapped command stays outside those. If you rely on them, do not create the
+  configuration file, or set `"patterns": []` in it: the hook then wraps nothing.
 - **A child shell.** A wrapped command runs in its own `bash -c`, under bash even in a session whose shell is zsh: a
   `cd` in it does not carry over to the session's next Bash call, and the session's shell functions and aliases are not
   available in it.
