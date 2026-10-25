@@ -8,6 +8,7 @@ import contextlib
 import fcntl
 import io
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -38,15 +39,23 @@ class QueueCase(TempHome):
     def setUp(self) -> None:
         super().setUp()
         # The suite may itself run inside a held slot; patch.dict in TempHome puts them back.
-        for name in ("TEST_QUEUE_DIR", "TEST_QUEUE_SLOT", "TEST_QUEUE_SLOTS"):
+        for name in (
+            "TEST_QUEUE_DIR",
+            "TEST_QUEUE_SLOT",
+            "TEST_QUEUE_SLOTS",
+            "TEST_QUEUE_HOLDER",
+            "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS",
+        ):
             os.environ.pop(name, None)
         self.state = self.home / ".local" / "state" / "test-queue"
         self.marks = self.home / "marks"
         self.marks.mkdir()
 
-    def start(self, name: str, *flags: str, seconds: float = 0) -> subprocess.Popen[str]:
-        """Start `test-queue run --label <name>` of SCRIPT in HOME; cleanup stops it and its command."""
-        command = [sys.executable, "-c", SCRIPT, str(self.marks), name, str(seconds)]
+    def start(
+        self, name: str, *flags: str, seconds: float = 0, script: str = SCRIPT
+    ) -> subprocess.Popen[str]:
+        """Start `test-queue run --label <name>` of `script` in HOME; cleanup stops it and its command."""
+        command = [sys.executable, "-c", script, str(self.marks), name, str(seconds)]
         proc = subprocess.Popen(
             [sys.executable, str(TOOL), "run", "--label", name, *flags, "--", *command],
             cwd=self.home,
@@ -105,18 +114,22 @@ class QueueCase(TempHome):
         self.addCleanup(release)
         return release
 
+    def holder_file(self, pid: int) -> None:
+        """Name `pid` as slot 0's holder, as a call does once it holds the slot."""
+        entry = {"label": "outer", "pid": pid, "cwd": "/", "since": time.time(), "last": False}
+        write_json(self.state / "slot-0.json", entry)
+
 
 class QueueTests(QueueCase):
     def test_second_run_waits_for_the_first(self) -> None:
-        first = self.start("first", seconds=0.5)
+        self.start("first", seconds=30)  # keeps the only slot until cleanup stops it
         self.when("first")
         second = self.start("second")
-        self.assertEqual(first.wait(10), 0)
-        self.assertEqual(second.wait(10), 0)
-        self.assertGreaterEqual(self.when("second"), self.when("first", "end"))
+        self.ticket(second)
         assert second.stderr is not None
         held = f"held by first ({self.home.resolve()}) for 0 min"
-        self.assertIn(f"test-queue: waiting; {held}; 0 ahead", second.stderr.read())
+        self.assertEqual(second.stderr.readline(), f"test-queue: waiting; {held}; 0 ahead\n")
+        self.assertFalse((self.marks / "second.start").exists())
 
     def test_two_slots_run_two_at_once(self) -> None:
         os.environ["TEST_QUEUE_SLOTS"] = "2"
@@ -176,7 +189,7 @@ class QueueTests(QueueCase):
 
     def test_a_signal_while_waiting_removes_the_ticket(self) -> None:
         self.hold_slot()
-        for signum in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+        for signum in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT):
             with self.subTest(signal=signum.name):
                 call = self.start(f"waiter-{signum}")
                 self.ticket(call)
@@ -191,7 +204,7 @@ class QueueTests(QueueCase):
         self.assertEqual(test_queue.status(), ([], []))
 
     def test_signals_reach_the_command(self) -> None:
-        for signum in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+        for signum in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP, signal.SIGQUIT):
             with self.subTest(signal=signum.name):
                 name = f"victim-{signum}"
                 call = self.start(name, seconds=30)
@@ -201,9 +214,59 @@ class QueueTests(QueueCase):
                 with self.assertRaises(ProcessLookupError):
                     os.kill(self.pid(name), 0)
 
+    def test_an_ignored_signal_stays_ignored(self) -> None:
+        # `nohup test-queue run -- …`: a SIGHUP ignored when the call starts ends neither its wait nor its
+        # command. The command takes SIGHUP back, so a forwarded one would end it.
+        release = self.hold_slot()
+        hangup = signal.signal(signal.SIGHUP, signal.SIG_IGN)  # the call inherits it
+        try:
+            script = "import signal; signal.signal(signal.SIGHUP, signal.SIG_DFL)" + SCRIPT
+            call = self.start("nohup", seconds=1, script=script)
+        finally:
+            signal.signal(signal.SIGHUP, hangup)
+        self.ticket(call)
+        call.send_signal(signal.SIGHUP)
+        release()
+        self.when("nohup")
+        call.send_signal(signal.SIGHUP)
+        self.assertEqual(call.wait(10), 0)
+        self.when("nohup", "end")
+
+    def test_unusable_state_directory_runs_unqueued(self) -> None:
+        blocked = self.home / "a-file"
+        blocked.touch()
+        os.environ.update(TEST_QUEUE_DIR=str(blocked), TEST_QUEUE_SLOT="outer", TEST_QUEUE_HOLDER="1")
+        variables = "{'TEST_QUEUE_SLOT', 'TEST_QUEUE_HOLDER'}"
+        outside = f"import os; raise SystemExit(1 if {variables} & set(os.environ) else 5)"
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.assertEqual(test_queue.main(["run", "--", sys.executable, "-c", outside]), 5)
+        line = rf"test-queue: cannot use {re.escape(str(blocked))} \(.+\); running unqueued\n"
+        self.assertRegex(err.getvalue(), f"^{line}$")
+
+    def test_state_directories_are_private(self) -> None:
+        self.assertEqual(test_queue.main(["run", "--", sys.executable, "-c", ""]), 0)
+        for made in (
+            self.home / ".local",
+            self.home / ".local" / "state",
+            self.state,
+            self.state / "waiting",
+        ):
+            with self.subTest(made=str(made.relative_to(self.home))):
+                self.assertEqual(made.stat().st_mode & 0o777, 0o700)
+        # A directory that already exists keeps its mode.
+        own = self.home / "own"
+        own.mkdir()
+        own.chmod(0o755)
+        os.environ["TEST_QUEUE_DIR"] = str(own)
+        self.assertEqual(test_queue.main(["run", "--", sys.executable, "-c", ""]), 0)
+        self.assertEqual(own.stat().st_mode & 0o777, 0o755)
+        self.assertEqual((own / "waiting").stat().st_mode & 0o777, 0o700)
+
     def test_nested_run_runs_at_once(self) -> None:
         self.hold_slot()
-        os.environ["TEST_QUEUE_SLOT"] = "outer"
+        self.holder_file(os.getpid())
+        os.environ.update(TEST_QUEUE_SLOT="outer", TEST_QUEUE_HOLDER=str(os.getpid()))
         show = "import os; print(os.environ['TEST_QUEUE_SLOT'])"
         proc = subprocess.run(
             [sys.executable, str(TOOL), "run", "--label", "inner", "--", sys.executable, "-c", show],
@@ -214,6 +277,16 @@ class QueueTests(QueueCase):
         )
         self.assertEqual((proc.returncode, proc.stdout, proc.stderr), (0, "inner\n", ""))
         self.assertEqual(list(self.state.glob("waiting/*")), [])
+
+    def test_nested_run_without_its_holder_queues(self) -> None:
+        # What a daemon started inside a slot passes on once the call that held the slot is gone.
+        gone = subprocess.Popen([sys.executable, "-c", ""])
+        gone.wait()
+        self.hold_slot()
+        self.holder_file(os.getpid())
+        os.environ.update(TEST_QUEUE_SLOT="outer", TEST_QUEUE_HOLDER=str(gone.pid))
+        self.ticket(self.start("inner"))
+        self.assertFalse((self.marks / "inner.start").exists())
 
     def test_status_prints_holders_and_waiters(self) -> None:
         self.start("holder", seconds=30)

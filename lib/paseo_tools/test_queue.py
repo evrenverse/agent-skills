@@ -1,4 +1,4 @@
-"""test-queue: one machine-wide queue, so heavy test runs run one after another instead of side by side.
+"""test-queue: one queue per user, so heavy test runs run one after another instead of side by side.
 
     test-queue run [--label L] [--last] -- <command…>   wait for a slot, run the command holding it
     test-queue status                                   who holds a slot and who waits, in queue order
@@ -14,14 +14,17 @@ dies, SIGKILL included; the holder's label, directory and start sit beside it in
 only while the lock is held. A waiting call leaves a ticket `waiting/<pid>.json`, checks every second and
 takes a free slot only when fewer calls are ahead of it than slots are free. It holds the lock of
 `waiting/<pid>.lock` from before the ticket exists until after it is gone, so the same rule holds: a ticket
-whose lock is free is dead and dropped, whatever process has its pid now. SIGTERM, SIGINT and SIGHUP during
-the wait remove the ticket and end the call with 128 + the signal. `--last` (for cron lines) lets every other
-waiter go first until it has waited `last_wait_max_s` seconds.
+whose lock is free is dead and dropped, whatever process has its pid now. SIGTERM, SIGINT, SIGHUP and SIGQUIT
+during the wait remove the ticket and end the call with 128 + the signal. `--last` (for cron lines) lets every
+other waiter go first until it has waited `last_wait_max_s` seconds.
 
 The command runs in its own session, so its process group is its own, with the call's streams and environment
-plus `TEST_QUEUE_SLOT=<label>`; SIGTERM, SIGINT and SIGHUP are passed on to that group. A call with
-`TEST_QUEUE_SLOT` already set runs at once, without a slot or a ticket: a check that starts a suite inside a
-held slot must not wait for a second one.
+plus `TEST_QUEUE_SLOT=<label>` and `TEST_QUEUE_HOLDER=<the call's pid>`; the same four signals are passed on
+to that group. A signal ignored when the call starts (nohup) stays ignored, in the wait and in the command. A
+call whose `TEST_QUEUE_HOLDER` names a call that still holds its slot runs at once, without a slot or a
+ticket: a check that starts a suite inside a held slot must not wait for a second one, and a daemon started
+inside a slot queues again once that call is gone. A call that cannot use the state directory says so on
+stderr and runs its command unqueued, without those two variables.
 
 The hook (hooks/hooks.json) is off until the configuration file exists; `{}` turns it on with the defaults.
 It acts in a session in bypassPermissions mode only: its `allow` would skip the permission prompt of any
@@ -32,7 +35,8 @@ allows; a foreground call keeps its own, since Claude Code moves it to the backg
 unless CLAUDE_CODE_DISABLE_BACKGROUND_TASKS is set, and then it gets the Bash tool's longest, ten minutes. A
 pattern that does not compile is skipped; any other error means no output: the call runs as it was.
 
-State: $TEST_QUEUE_DIR, else $XDG_STATE_HOME/test-queue, else ~/.local/state/test-queue. Configuration:
+State, one queue for all of a user's sessions and cron jobs: $TEST_QUEUE_DIR, else
+$XDG_STATE_HOME/test-queue, else ~/.local/state/test-queue, its directories made with mode 700. Configuration:
 $XDG_CONFIG_HOME/test-queue/config.json, else ~/.config/test-queue/config.json; a missing or broken file or
 value means the defaults.
 
@@ -58,12 +62,13 @@ import signal
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field, fields, replace
 from pathlib import Path
 from typing import Any
 
 POLL = 1.0  # seconds between a waiting call's checks
-FORWARDED = (signal.SIGTERM, signal.SIGINT, signal.SIGHUP)
+FORWARDED = (signal.SIGTERM, signal.SIGINT, signal.SIGHUP, signal.SIGQUIT)
 
 
 def state_dir() -> Path:
@@ -132,6 +137,14 @@ def _read(path: Path) -> Entry | None:
         return Entry(**json.loads(path.read_text()))
     except (OSError, ValueError, TypeError):
         return None
+
+
+def _mkdir(path: Path) -> None:
+    """Make the directory `path`, and its missing parents, with mode 700; one that exists keeps its mode."""
+    if path.parent != path and not path.is_dir():
+        _mkdir(path.parent)
+        with contextlib.suppress(FileExistsError):  # made meanwhile by another call
+            path.mkdir(0o700)
 
 
 def _current(path: Path, fd: int) -> bool:
@@ -220,7 +233,7 @@ def _waiters(config: Config) -> list[Entry]:
 def status(config: Config | None = None) -> tuple[list[Entry], list[Entry]]:
     """The calls holding a slot, and the waiting ones in queue order."""
     config = config or load_config()
-    (state_dir() / "waiting").mkdir(parents=True, exist_ok=True)
+    _mkdir(state_dir() / "waiting")
     free, holders = _probe(config)
     for fd in free.values():
         os.close(fd)
@@ -258,13 +271,22 @@ def _interrupt(signum: int, _frame: object) -> None:
     raise _Interrupted(signum)
 
 
+def _catch(handler: Callable[[int, Any], None]) -> dict[signal.Signals, Any]:
+    """Set `handler` for the forwarded signals the call does not ignore (nohup); the handlers it replaced."""
+    return {
+        signum: signal.signal(signum, handler)
+        for signum in FORWARDED
+        if signal.getsignal(signum) != signal.SIG_IGN
+    }
+
+
 def _queue(me: Entry, config: Config) -> tuple[int, int]:
     """Wait under a ticket that goes however the wait ends; the slot and the descriptor holding its lock."""
     ticket = state_dir() / "waiting" / f"{me.pid}.json"
-    ticket.parent.mkdir(parents=True, exist_ok=True)
+    _mkdir(ticket.parent)
     lock = ticket.with_suffix(".lock")
     fd = _hold(lock)  # before the ticket exists: a ticket whose lock is free is dead
-    previous = {signum: signal.signal(signum, _interrupt) for signum in FORWARDED}
+    previous = _catch(_interrupt)
     try:
         _write(ticket, me)
         return _wait(me, config)
@@ -276,8 +298,8 @@ def _queue(me: Entry, config: Config) -> tuple[int, int]:
         os.close(fd)
 
 
-def _execute(command: list[str], label: str) -> int:
-    """Run `command` in its own session, passing SIGTERM, SIGINT and SIGHUP on to it; its exit code."""
+def _execute(command: list[str], env: dict[str, str]) -> int:
+    """Run `command` in its own session with the environment `env`, passing signals on; its exit code."""
     child: list[subprocess.Popen[bytes]] = []
     early: list[int] = []  # signals that came before the command existed
 
@@ -288,14 +310,12 @@ def _execute(command: list[str], label: str) -> int:
         with contextlib.suppress(ProcessLookupError):
             os.killpg(child[0].pid, signum)
 
-    previous = {signum: signal.signal(signum, forward) for signum in FORWARDED}
+    previous = _catch(forward)
     try:
         try:
             # A new session, not preexec_fn=os.setpgrp: no Python runs between fork and exec, and a command
             # that reads the terminal is not stopped as a background group (SIGTTIN).
-            proc = subprocess.Popen(
-                command, env={**os.environ, "TEST_QUEUE_SLOT": label}, start_new_session=True
-            )
+            proc = subprocess.Popen(command, env=env, start_new_session=True)
         except OSError as error:
             print(f"test-queue: {error}", file=sys.stderr)
             return 127
@@ -309,23 +329,47 @@ def _execute(command: list[str], label: str) -> int:
             signal.signal(signum, handler)
 
 
-def run(command: list[str], label: str, last: bool = False, config: Config | None = None) -> int:
-    """Wait for a slot, run `command` holding it and return its exit code.
+def _nested(config: Config) -> bool:
+    """Whether the call named by TEST_QUEUE_HOLDER, which started this one inside its slot, still holds it."""
+    holder = os.environ.get("TEST_QUEUE_HOLDER")
+    return bool(holder) and any(str(entry.pid) == holder for entry in status(config)[0])
 
-    Inside a held slot (TEST_QUEUE_SLOT set) the command runs at once, without a slot or a ticket.
-    """
-    if os.environ.get("TEST_QUEUE_SLOT"):
-        return _execute(command, label)
-    config = config or load_config()
-    me = Entry(label, os.getpid(), os.getcwd(), time.time(), last)
-    try:
-        slot, fd = _queue(me, config)
-    except _Interrupted as stop:
-        return 128 + stop.args[0]
+
+def _take(me: Entry, config: Config) -> tuple[Path, int]:
+    """Wait for a slot and write `me` as its holder; the holder file and the descriptor holding its lock."""
+    slot, fd = _queue(me, config)
     holder = state_dir() / f"slot-{slot}.json"
     try:
         _write(holder, replace(me, since=time.time()))
-        return _execute(command, label)
+    except OSError:
+        os.close(fd)
+        raise
+    return holder, fd
+
+
+def run(command: list[str], label: str, last: bool = False, config: Config | None = None) -> int:
+    """Wait for a slot, run `command` holding it and return its exit code.
+
+    Inside a slot that its holder (TEST_QUEUE_HOLDER) still holds, the command runs at once, without a slot or
+    a ticket. When the state directory cannot be used, it runs unqueued.
+    """
+    config = config or load_config()
+    me = Entry(label, os.getpid(), os.getcwd(), time.time(), last)
+    try:
+        taken = None if _nested(config) else _take(me, config)
+    except _Interrupted as stop:
+        return 128 + stop.args[0]
+    except OSError as error:
+        print(
+            f"test-queue: cannot use {state_dir()} ({error}); running unqueued", file=sys.stderr, flush=True
+        )
+        outside = {k: v for k, v in os.environ.items() if k not in ("TEST_QUEUE_SLOT", "TEST_QUEUE_HOLDER")}
+        return _execute(command, outside)
+    if taken is None:
+        return _execute(command, {**os.environ, "TEST_QUEUE_SLOT": label})
+    holder, fd = taken
+    try:
+        return _execute(command, {**os.environ, "TEST_QUEUE_SLOT": label, "TEST_QUEUE_HOLDER": str(me.pid)})
     finally:
         holder.unlink(missing_ok=True)  # while the lock is still held, so it is never the next holder's file
         os.close(fd)
