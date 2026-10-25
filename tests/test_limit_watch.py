@@ -546,7 +546,7 @@ class ReloadTests(WatchCase):
                 self.assertEqual(reloads(fake) + resumes(fake), [])
 
     def test_no_reload_when_reset_is_near(self) -> None:
-        fake = self.watch(RESET - minutes(20), reload=True)
+        fake = self.watch(RESET - minutes(40), reload=True)
         self.assertEqual(reloads(fake) + resumes(fake), [])
 
     def test_no_reload_when_reset_is_unknown(self) -> None:
@@ -634,7 +634,7 @@ class ReloadTests(WatchCase):
         after = RESET + minutes(1)
         dated = "You've hit your session limit · resets Oct 20, 8pm (Etc/UTC)"
         variants = {
-            # (a) without the cap, a reload and a resume line on every pass until 30 min before the reset
+            # (a) without the cap, a reload and a resume line on every pass until 45 min before the reset
             "reloaded onto a limited account": (SESSION_LIMIT, self.FAR, True, [0, 117, 147]),
             # (b) written again after its time, a date parses into the past: a resume line on every pass
             "a date": (dated, after, False, [0, 30, 60]),

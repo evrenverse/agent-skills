@@ -165,7 +165,7 @@ PATH=/usr/local/bin:/usr/bin:/bin
   ```
 
   It applies only to a Claude agent whose provider command in `~/.paseo/config.json` is `claude-rotate`, whose limit
-  resets more than 30 minutes from now, that is not running a turn and whose transcript shows no background task still
+  resets more than 45 minutes from now, that is not running a turn and whose transcript shows no background task still
   running, and only when `claude-rotate status` reports an account to move to that is not used up. The watcher then runs
   `paseo agent reload` (paseo restarts the agent's process, claude-rotate starts it on a free account) and sends the
   resume line at once. At most one reload per reset; if the agent is still blocked, it waits for the reset as usual.
