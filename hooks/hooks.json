@@ -1,5 +1,5 @@
 {
-  "description": "Heavy test runs in Bash calls go through test-queue (sessions in bypassPermissions mode only).",
+  "description": "Heavy test runs in Bash calls go through test-queue (bypassPermissions sessions only, once its configuration file exists).",
   "hooks": {
     "PreToolUse": [
       {

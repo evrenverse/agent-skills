@@ -23,23 +23,26 @@ plus `TEST_QUEUE_SLOT=<label>`; SIGTERM, SIGINT and SIGHUP are passed on to that
 `TEST_QUEUE_SLOT` already set runs at once, without a slot or a ticket: a check that starts a suite inside a
 held slot must not wait for a second one.
 
-The hook (hooks/hooks.json) sends a Bash call whose command matches one of the `patterns` through `run`, in
-a session in bypassPermissions mode only: its `allow` would skip the permission prompt of any other mode. The
-rewritten call is `test-queue run … -- bash -c '<command>'`, and a foreground call gets the Bash tool's
-longest timeout, since the wait in the queue counts against it. Any error means no output: the call runs as
-it was.
+The hook (hooks/hooks.json) is off until the configuration file exists; `{}` turns it on with the defaults.
+It acts in a session in bypassPermissions mode only: its `allow` would skip the permission prompt of any
+other mode. It sends a Bash call whose command matches one of the `patterns` outside its quoted strings and
+here-document bodies through `run`, as `test-queue run … -- bash -c '<command>'`. The wait in the queue
+counts against the call's timeout: a background call gets at least two hours, the most an unattended session
+allows; a foreground call keeps its own, since Claude Code moves it to the background when it is reached,
+unless CLAUDE_CODE_DISABLE_BACKGROUND_TASKS is set, and then it gets the Bash tool's longest, ten minutes. A
+pattern that does not compile is skipped; any other error means no output: the call runs as it was.
 
 State: $TEST_QUEUE_DIR, else $XDG_STATE_HOME/test-queue, else ~/.local/state/test-queue. Configuration:
-$XDG_CONFIG_HOME/test-queue/config.json, else ~/.config/test-queue/config.json; a missing or broken file means
-the defaults.
+$XDG_CONFIG_HOME/test-queue/config.json, else ~/.config/test-queue/config.json; a missing or broken file or
+value means the defaults.
 
 WHAT IT DOES NOT DO
   - Stop the command when the call itself is SIGKILLed: the slot frees with the call, and the command, in its
     own session, runs on outside the queue.
   - Keep the slot for what the command leaves behind: a daemon it starts inherits no lock.
   - Wrap a call by what it does: `patterns` match the command's text, so a script that runs a suite is not
-    heavy to the hook, and `echo "bun run check"` is. A wrapped command runs in a new `bash -c`, without the
-    session's shell functions and aliases.
+    heavy to the hook, and neither is a suite inside quotes, `bash -c 'bun run check'`. A wrapped command runs
+    in a new `bash -c`, without the session's shell functions and aliases.
 """
 
 from __future__ import annotations
@@ -60,7 +63,6 @@ from pathlib import Path
 from typing import Any
 
 POLL = 1.0  # seconds between a waiting call's checks
-BASH_TIMEOUT_MAX_MS = 600_000  # the Bash tool's longest timeout
 FORWARDED = (signal.SIGTERM, signal.SIGINT, signal.SIGHUP)
 
 
@@ -93,6 +95,8 @@ def load_config() -> Config:
         config.slots, config.last_wait_max_s = int(config.slots), int(config.last_wait_max_s)
     except (OSError, ValueError, TypeError):
         config = Config()
+    if not isinstance(config.patterns, list) or not all(isinstance(p, str) for p in config.patterns):
+        config.patterns = list(DEFAULT_PATTERNS)
     with contextlib.suppress(ValueError):
         config.slots = int(os.environ.get("TEST_QUEUE_SLOTS") or config.slots)
     config.slots = max(1, config.slots)
@@ -385,10 +389,59 @@ DEFAULT_PATTERNS: list[str] = [
     r"[ \t]*(?=$|[;&|<>()\n]|\d[<>])",
 ]
 
+# Claude Code moves a foreground call that reaches its timeout to the background, unless
+# CLAUDE_CODE_DISABLE_BACKGROUND_TASKS is set; unattended sessions stop a background call after 30 minutes
+# unless its timeout says longer, up to two hours.
+BACKGROUND_TIMEOUT_MS = 7_200_000
+FOREGROUND_TIMEOUT_MS = 600_000  # the Bash tool's longest foreground timeout
+
+# The shell syntax that hides text from the patterns, in one pass: an escaped character, a quoted string, a
+# here-string's `<<<`, a here-document's operator and delimiter, a newline (where pending here-document bodies
+# start), and a lone quote, which means the quoting does not parse. No alternative can backtrack.
+_SHELL = re.compile(
+    r"""\\.|'[^']*'|"(?:[^"\\]|\\.)*"|<<<|<<(-?)[ \t]*('[^']*'|"[^"]*"|[^\s;&|<>()'"]+)|\n|['"]""",
+    re.DOTALL,
+)
+
+
+def _unquoted(command: str) -> str:
+    """`command` with its quoted strings emptied and its here-document bodies removed.
+
+    When its quoting does not parse (an unbalanced quote), `command` itself.
+    """
+    out: list[str] = []
+    bodies: list[tuple[bool, str]] = []  # (tabs stripped, delimiter) of the bodies after the next newline
+    pos = 0
+    while (token := _SHELL.search(command, pos)) is not None:
+        text = token.group()
+        out += [command[pos : token.start()], text]
+        pos = token.end()
+        if text in ("'", '"'):
+            return command
+        if text[0] in "'\"":
+            out[-1] = text[0] * 2
+        elif token.group(2) is not None:
+            bodies.append((token.group(1) == "-", token.group(2).strip("'\"\\")))
+        elif text == "\n":
+            for tabs, delimiter in bodies:  # a body without its delimiter line runs to the end, as in bash
+                line = re.compile(("^\t*" if tabs else "^") + re.escape(delimiter) + "$", re.M)
+                end = line.search(command, pos)
+                pos = end.end() if end else len(command)
+            bodies = []
+    return "".join([*out, command[pos:]])
+
 
 def is_heavy(command: str, patterns: list[str]) -> bool:
-    """Whether one of the regular expressions `patterns` is found in `command`."""
-    return any(re.search(pattern, command) for pattern in patterns)
+    """Whether one of the regular expressions `patterns` is found in `command` outside its quoted strings.
+
+    Here-document bodies do not count either. A pattern that does not compile is skipped.
+    """
+    code = _unquoted(command)
+    for pattern in patterns:
+        with contextlib.suppress(re.error):
+            if re.search(pattern, code):
+                return True
+    return False
 
 
 def wrap(command: str, label: str, executable: str) -> str:
@@ -399,9 +452,12 @@ def wrap(command: str, label: str, executable: str) -> str:
 def hook(payload: Any, config: Config, executable: str) -> dict[str, Any] | None:
     """The PreToolUse answer for a Bash call that is heavy and in a bypassPermissions session, else None.
 
-    Any error, a malformed payload or a broken pattern included, gives None: the call runs as it was.
+    Without the configuration file the hook is off: None. Any error, a malformed payload included, gives None:
+    the call runs as it was.
     """
     with contextlib.suppress(Exception):  # this runs before every Bash call and must never fail one
+        if not config_path().exists():
+            return None
         if payload["permission_mode"] != "bypassPermissions" or payload["tool_name"] != "Bash":
             return None
         tool_input = payload["tool_input"]
@@ -410,8 +466,11 @@ def hook(payload: Any, config: Config, executable: str) -> dict[str, Any] | None
         if queued or not is_heavy(command, config.patterns):
             return None
         updated = {**tool_input, "command": wrap(command, default_label(payload["cwd"], command), executable)}
-        if not tool_input.get("run_in_background") and (tool_input.get("timeout") or 0) < BASH_TIMEOUT_MAX_MS:
-            updated["timeout"] = BASH_TIMEOUT_MAX_MS
+        timeout = tool_input.get("timeout") or 0  # the wait in the queue counts against it
+        if tool_input.get("run_in_background"):
+            updated["timeout"] = max(timeout, BACKGROUND_TIMEOUT_MS)
+        elif os.environ.get("CLAUDE_CODE_DISABLE_BACKGROUND_TASKS", "0") not in ("", "0"):
+            updated["timeout"] = max(timeout, FOREGROUND_TIMEOUT_MS)
         return {
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",

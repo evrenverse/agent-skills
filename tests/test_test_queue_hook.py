@@ -21,6 +21,13 @@ from tests.support import TempHome, write_json
 ROOT = Path(__file__).resolve().parent.parent
 EXECUTABLE = "/opt/tools/bin/test-queue"
 CWD = "/work/repo"
+QUEUE_VARIABLES = (
+    "TEST_QUEUE_DIR",
+    "TEST_QUEUE_SLOT",
+    "TEST_QUEUE_SLOTS",
+    "TEST_QUEUE_HOLDER",
+    "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS",
+)
 
 HEAVY = [
     "bun run check",
@@ -37,8 +44,10 @@ HEAVY = [
     "npx vitest run",
     "bunx playwright test",
     "pytest",
-    # Matching is textual, and a false positive only queues.
-    'echo "bun run check"',
+    'cd "$dir" && bun run check',
+    "bun run check 2>&1 | tail -5",
+    # Matching is textual outside quotes: an unquoted mention queues, and a false positive only queues.
+    "pip install pytest",
     # A directory or a flag's value is no test file: these run the whole suite.
     "pytest tests/",
     "pytest tests",
@@ -58,6 +67,16 @@ LIGHT = [
     "playwright test e2e/one.spec.ts",
     "pytest tests/test_one.py",
     "bun test src/a.test.ts",
+    # Quoted text and here-document bodies do not count.
+    'echo "bun run check"',
+    'git commit -m "fix: pytest fixture" && git push',
+    'gh pr create --title t --body "bun run check green"',
+    "git commit -m \"$(cat <<'EOF'\nTested with bun run check\nEOF\n)\"",
+    "cat <<EOF > notes.md\nbun run check\nEOF",
+    # A known limit: a heavy command written inside quotes is not seen.
+    "bash -c 'bun run check'",
+    # A config file's name looks like a test file.
+    "vitest --config vitest.config.ts",
 ]
 # Commands whose quoting a wrapped call must keep: wrapped, `bash -c` does what it does without.
 QUOTING = [
@@ -100,8 +119,9 @@ class HookCase(TempHome):
     def setUp(self) -> None:
         super().setUp()
         # The suite may itself run inside a held slot; patch.dict in TempHome puts them back.
-        for name in ("TEST_QUEUE_DIR", "TEST_QUEUE_SLOT", "TEST_QUEUE_SLOTS"):
+        for name in QUEUE_VARIABLES:
             os.environ.pop(name, None)
+        write_json(test_queue.config_path(), {})  # the hook acts only once the file exists
 
     def decide(self, call: Any, executable: str = EXECUTABLE) -> dict[str, Any] | None:
         """The hook's answer to `call` with the default configuration."""
@@ -117,6 +137,12 @@ class HookCase(TempHome):
         ):
             code = test_queue.main(["hook"])
         return code, out.getvalue(), err.getvalue()
+
+    def updated(self, tool_input: dict[str, Any]) -> dict[str, Any]:
+        """The rewritten tool input of a heavy Bash call with `tool_input`."""
+        result = self.decide(payload(tool_input=tool_input))
+        assert result is not None
+        return result["hookSpecificOutput"]["updatedInput"]
 
 
 class PatternTests(HookCase):
@@ -140,6 +166,26 @@ class PatternTests(HookCase):
             f"pytest {flags}",
             f"bun test {flags} src/a.test.ts",
             f"vitest run {flags} run x",
+        ):
+            with self.subTest(command=command[:20] + "…" + command[-20:]):
+                took = []
+                for _ in range(5):
+                    start = time.perf_counter()
+                    test_queue.is_heavy(command, test_queue.DEFAULT_PATTERNS)
+                    took.append(time.perf_counter() - start)
+                self.assertLess(min(took), 0.01)
+
+    def test_quoting_does_not_backtrack(self) -> None:
+        # The same for long runs of quotes and backslashes, balanced or not.
+        for command in (
+            '"\\' * 1000,
+            "'\\" * 1000,
+            '\\"' * 1000,
+            '"' + '\\"' * 1000,
+            "bun run check " + "'\"" * 1000,
+            "pytest " + "\"'\\" * 700,
+            "cat <<" + "'" * 2000,
+            "cat <<a\n" * 500,
         ):
             with self.subTest(command=command[:20] + "…" + command[-20:]):
                 took = []
@@ -185,28 +231,42 @@ class HookTests(HookCase):
                     "updatedInput": {
                         "command": wrapped,
                         "description": "d",
-                        "timeout": 120000,
+                        "timeout": 7_200_000,
                         "run_in_background": True,
                     },
                 }
             },
         )
 
-    def test_foreground_call_gets_the_longest_timeout(self) -> None:
-        # A wait in the queue counts against the Bash tool's timeout, so a foreground call gets its maximum.
-        for timeout in ({}, {"timeout": 120000}, {"timeout": 600000}):
+    def test_background_call_gets_two_hours(self) -> None:
+        # Unattended sessions stop a background call after 30 minutes unless its timeout says longer.
+        for timeout, expected in (
+            ({}, 7_200_000),
+            ({"timeout": 120000}, 7_200_000),
+            ({"timeout": 9_000_000}, 9_000_000),
+        ):
             with self.subTest(timeout=timeout):
-                tool_input = {"command": "bun run check", "run_in_background": False, **timeout}
-                result = self.decide(payload(tool_input=tool_input))
-                assert result is not None
-                updated = result["hookSpecificOutput"]["updatedInput"]
-                self.assertEqual(updated["timeout"], 600000)
-                self.assertFalse(updated["run_in_background"])
+                updated = self.updated({"command": "bun run check", "run_in_background": True, **timeout})
+                self.assertEqual(updated["timeout"], expected)
 
-    def test_call_without_run_in_background_is_a_foreground_call(self) -> None:
-        result = self.decide(payload(tool_input={"command": "bun run check"}))
-        assert result is not None
-        self.assertEqual(result["hookSpecificOutput"]["updatedInput"]["timeout"], 600000)
+    def test_foreground_call_keeps_its_timeout(self) -> None:
+        # Claude Code moves a foreground call that reaches its timeout to the background, where it runs on.
+        for setting in (None, "", "0"):
+            for tool_input in ({"run_in_background": False}, {"timeout": 120000}, {}):
+                with self.subTest(setting=setting, tool_input=tool_input):
+                    os.environ.pop("CLAUDE_CODE_DISABLE_BACKGROUND_TASKS", None)
+                    if setting is not None:
+                        os.environ["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] = setting
+                    updated = self.updated({"command": "bun run check", **tool_input})
+                    self.assertEqual(updated.get("timeout"), tool_input.get("timeout"))
+
+    def test_foreground_call_without_background_tasks_gets_ten_minutes(self) -> None:
+        # Then a foreground call cannot move to the background, and the wait counts against its timeout.
+        os.environ["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] = "1"
+        for tool_input in ({"run_in_background": False}, {"timeout": 120000}, {"timeout": 600000}):
+            with self.subTest(tool_input=tool_input):
+                updated = self.updated({"command": "bun run check", **tool_input})
+                self.assertEqual(updated["timeout"], 600000)
 
     def test_hook_leaves_alone(self) -> None:
         spaced = "/opt/my tools/bin/test-queue"
@@ -226,7 +286,9 @@ class HookTests(HookCase):
             "tool_input not an object": payload(tool_input="bun run check"),
             "command missing": payload(tool_input={"description": "d"}),
             "command not a string": payload(tool_input={"command": 5}),
-            "timeout not a number": payload(tool_input={"command": "bun run check", "timeout": "x"}),
+            "timeout not a number": payload(
+                tool_input={"command": "bun run check", "timeout": "x", "run_in_background": True}
+            ),
             "cwd missing": without("cwd"),
             "payload not an object": ["bun run check"],
         }
@@ -234,9 +296,16 @@ class HookTests(HookCase):
             with self.subTest(case=name):
                 self.assertIsNone(self.decide(call, spaced if "quoted" in name else EXECUTABLE))
 
-    def test_hook_leaves_alone_on_a_broken_pattern(self) -> None:
+    def test_hook_needs_the_configuration_file(self) -> None:
+        test_queue.config_path().unlink()
+        self.assertIsNone(self.decide(payload()))
+        self.assertEqual(self.through_main(json.dumps(payload())), (0, "", ""))
+
+    def test_broken_pattern_is_skipped(self) -> None:
         self.assertIsNone(test_queue.hook(payload(), test_queue.Config(patterns=["("]), EXECUTABLE))
         self.assertIsNone(test_queue.hook(payload(), test_queue.Config(patterns=[5]), EXECUTABLE))  # type: ignore[list-item]
+        config = test_queue.Config(patterns=["(", "^make check$"])
+        self.assertIsNotNone(test_queue.hook(payload("make check"), config, EXECUTABLE))
 
 
 class MainHookTests(HookCase):
@@ -257,6 +326,13 @@ class MainHookTests(HookCase):
         _, wrapped, _ = self.through_main(json.dumps(payload("make check")))
         self.assertIn("make check", json.loads(wrapped)["hookSpecificOutput"]["updatedInput"]["command"])
         self.assertEqual(self.through_main(json.dumps(payload("bun run check"))), (0, "", ""))
+
+    def test_config_patterns_must_be_a_list_of_strings(self) -> None:
+        for patterns in ("^make check$", ["^make check$", 5], None, {"a": "b"}):
+            with self.subTest(patterns=patterns):
+                write_json(test_queue.config_path(), {"patterns": patterns, "slots": 2})
+                config = test_queue.load_config()
+                self.assertEqual((config.patterns, config.slots), (test_queue.DEFAULT_PATTERNS, 2))
 
     def test_declared_hook_runs(self) -> None:
         declared = json.loads((ROOT / "hooks" / "hooks.json").read_text())["hooks"]["PreToolUse"]
