@@ -217,14 +217,14 @@ gives no output, and the call runs as it was.
   such rules, set `"patterns": []` in the configuration file: the hook then wraps nothing.
 - **A child shell.** A wrapped command runs in its own `bash -c`: a `cd` in it does not carry over to the session's next
   Bash call, and the session's shell functions and aliases are not available in it.
-- **Codex sessions are not wrapped.** Codex plugins can bundle hooks, but its command hooks document no exec-form
-  `args`, which this hook uses, and its Bash input differs. Codex may find `hooks/hooks.json` and offer it for trust in
-  `/hooks`: leave it untrusted, it is written for Claude Code. In Codex, call `test-queue run` yourself.
+- **Codex sessions are not wrapped:** its command hooks document no exec-form `args`, which this hook uses. Codex may
+  find `hooks/hooks.json` and offer it for trust in `/hooks`: leave it untrusted, it is written for Claude Code, and
+  call `test-queue run` yourself in Codex.
 
 **What counts as heavy.** By default the hook treats these as heavy:
 
 - a package script `check`, `ci`, `e2e`, `test` or `test:<name>` run with `bun`, `npm`, `pnpm` or `yarn run`, and
-  `npm test`, `pnpm test` and `yarn test`; other scripts such as `ci:status` and `check:fast` are light;
+  `npm test`, `pnpm test` and `yarn test`; other scripts such as `ci:report` and `check:fast` are light;
 - `turbo` with `test` among its task names;
 - `vitest`, `playwright test`, `pytest` and `bun test`, unless one of their arguments looks like a test file (a name
   ending in `.py`, `.js`, `.jsx`, `.ts`, `.tsx` or the `m` and `c` variants such as `.mjs`, with an optional `:line` or
