@@ -1,5 +1,7 @@
 # test-queue Implementation Plan
 
+**Status:** approved by the maintainer on 2026-10-25; implemented on this branch, finished by a pull request.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or
 > superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
