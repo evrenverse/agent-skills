@@ -12,7 +12,7 @@ from pathlib import Path
 from tests.support import TempHome
 
 REPO = Path(__file__).resolve().parent.parent
-COMMANDS = ("paseo-limit-watch", "paseo-notify", "paseo-title")
+COMMANDS = ("paseo-limit-watch", "paseo-notify", "paseo-title", "test-queue")
 
 
 def run(argv: list[str]) -> subprocess.CompletedProcess[str]:

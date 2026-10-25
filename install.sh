@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Links every executable in bin/ into ~/.local/bin, so the paseo tools run from any shell. Claude Code and
-# Codex users get the skills through the plugin (see README.md); this script only puts the CLI tools on PATH.
+# Links every executable in bin/ into ~/.local/bin, so the paseo tools and test-queue run from any shell. Claude
+# Code and Codex users get the skills through the plugin (see README.md); this script only puts the CLI tools on PATH.
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
