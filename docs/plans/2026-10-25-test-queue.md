@@ -99,7 +99,7 @@ queue per repository still lets each of them take the whole machine at once.
     `hook`; the label defaults to the working directory's name and the command's first 60 characters.
   - Environment of a running command: `TEST_QUEUE_SLOT=<label>`.
 
-- [ ] **Step 1: Write the failing tests** in `tests/test_test_queue.py` (classes derive from `TempHome`; commands are
+- [x] **Step 1: Write the failing tests** in `tests/test_test_queue.py` (classes derive from `TempHome`; commands are
   short `python3 -c` scripts that write marker files and sleep at most 1 s):
   - `test_second_run_waits_for_the_first`: two `test-queue run` processes, one slot; the second's command starts only
     after the first's ended (marker timestamps).
@@ -117,8 +117,8 @@ queue per repository still lets each of them take the whole machine at once.
     once.
   - `test_status_prints_holders_and_waiters`: `main(["status"])` prints each holder's and waiter's label, cwd and age.
   - `test_broken_config_falls_back_to_defaults`: invalid JSON in the config file → `Config()`.
-- [ ] **Step 2: Run them to see them fail**: `python3 -m unittest tests.test_test_queue -v` → errors, no module.
-- [ ] **Step 3: Implement** in `lib/paseo_tools/test_queue.py`, with `bin/test-queue` as the other entry points are
+- [x] **Step 2: Run them to see them fail**: `python3 -m unittest tests.test_test_queue -v` → errors, no module.
+- [x] **Step 3: Implement** in `lib/paseo_tools/test_queue.py`, with `bin/test-queue` as the other entry points are
   (`sys.path` to `lib/`, `raise SystemExit(test_queue.main())`):
   - Slot `i` is `state_dir()/slot-<i>.lock`, held with `fcntl.flock(LOCK_EX | LOCK_NB)` by the `run` process for the
     command's whole life; its holder writes `slot-<i>.json` (an `Entry`, written to a temporary name and renamed).
@@ -131,8 +131,8 @@ queue per repository still lets each of them take the whole machine at once.
     `SIGTERM` and `SIGINT` go on to the group; the call exits with the command's code (128 + signal when it died of
     one).
   - `TEST_QUEUE_SLOT` set: run at once, no slot, no ticket.
-- [ ] **Step 4: Run the tests**: `python3 -m unittest tests.test_test_queue tests.test_bin -v` → OK.
-- [ ] **Step 5: Commit**: `git add lib/paseo_tools/test_queue.py bin/test-queue tests/test_test_queue.py tests/test_bin.py` and
+- [x] **Step 4: Run the tests**: `python3 -m unittest tests.test_test_queue tests.test_bin -v` → OK.
+- [x] **Step 5: Commit**: `git add lib/paseo_tools/test_queue.py bin/test-queue tests/test_test_queue.py tests/test_bin.py` and
   `git commit -m "feat: test-queue, one machine-wide queue for heavy test runs"`.
 
 ### Task 2: The hook: heavy Bash commands go through the queue
@@ -152,7 +152,7 @@ queue per repository still lets each of them take the whole machine at once.
   - `hook(payload: dict, config: Config, executable: str) -> dict | None`, and `main(["hook"])` reading the payload
     from stdin and printing the result as JSON.
 
-- [ ] **Step 1: Write the failing tests** in `tests/test_test_queue_hook.py`:
+- [x] **Step 1: Write the failing tests** in `tests/test_test_queue_hook.py`:
   - `test_heavy_patterns`: a table. Heavy: `bun run check`, `mise exec -- bun run check > /tmp/x.log 2>&1`,
     `bun run test`, `bun run test:changed`, `bun run ci`, `bun run e2e`, `npm test`, `pnpm test`, `turbo run test`,
     `turbo run typecheck test --affected`, `bun run --cwd apps/web test`, `npx vitest run`, `bunx playwright test`,
@@ -173,18 +173,18 @@ queue per repository still lets each of them take the whole machine at once.
     stdin empty or not JSON (through `main(["hook"])`, exit 0).
   - `test_config_patterns_replace_the_defaults`: a config with `"patterns": ["^make check$"]` wraps `make check` and
     not `bun run check`.
-- [ ] **Step 2: Run them to see them fail**: `python3 -m unittest tests.test_test_queue_hook -v`.
-- [ ] **Step 3: Implement** `DEFAULT_PATTERNS`, `is_heavy`, `wrap`, `hook` and the `hook` subcommand. The label is the
+- [x] **Step 2: Run them to see them fail**: `python3 -m unittest tests.test_test_queue_hook -v`.
+- [x] **Step 3: Implement** `DEFAULT_PATTERNS`, `is_heavy`, `wrap`, `hook` and the `hook` subcommand. The label is the
   payload's `cwd` name and the command's first 60 characters; `executable` is the absolute path of `bin/test-queue`
   beside the running module. Any exception in `hook` → no output, exit 0.
-- [ ] **Step 4: Declare the hook** in `hooks/hooks.json`: `PreToolUse`, matcher `Bash`, `type: "command"`,
+- [x] **Step 4: Declare the hook** in `hooks/hooks.json`: `PreToolUse`, matcher `Bash`, `type: "command"`,
   `command: "python3"`, `args: ["${CLAUDE_PLUGIN_ROOT}/bin/test-queue", "hook"]`, `timeout: 10`. Then check Codex's
   current hook documentation: if a Codex plugin can declare a pre-tool hook that rewrites a shell command, declare it
   for `.codex-plugin` the same way; otherwise the README says Codex sessions are not wrapped. Record which in the
   commit body.
-- [ ] **Step 5: Run** `python3 -m unittest tests.test_test_queue_hook -v` → OK, and `claude plugin validate .` → no
+- [x] **Step 5: Run** `python3 -m unittest tests.test_test_queue_hook -v` → OK, and `claude plugin validate .` → no
   error.
-- [ ] **Step 6: Commit**: `git add lib/paseo_tools/test_queue.py hooks/hooks.json tests/test_test_queue_hook.py` and
+- [x] **Step 6: Commit**: `git add lib/paseo_tools/test_queue.py hooks/hooks.json tests/test_test_queue_hook.py` and
   `git commit -m "feat: the plugin's hook sends heavy Bash commands through test-queue"`.
 
 ### Task 3: Documents and the entry-point list
@@ -193,30 +193,31 @@ queue per repository still lets each of them take the whole machine at once.
 - Modify: `README.md`, `SECURITY.md`, `AGENTS.md` (layout), `CONTRIBUTING.md` ("links the three commands"),
   `install.sh` (its comment if it names the tools)
 
-- [ ] **Step 1:** `README.md` gets a `test-queue` section: what it is for, `run`, `run --last` for cron lines,
+- [x] **Step 1:** `README.md` gets a `test-queue` section: what it is for, `run`, `run --last` for cron lines,
   `status`, the hook and its `bypassPermissions` limit, that a foreground call whose wait and run pass the Bash tool's
   ten minutes ends there (heavy runs belong in the background), the configuration file with its three keys and defaults,
   `TEST_QUEUE_SLOTS`, and an example cron line
   `7 * * * * test-queue run --last --label "<name> CI" -- <the CI's command>`.
-- [ ] **Step 2:** `SECURITY.md` gets a `test-queue` table in the form of the others: Reads (its configuration file,
+- [x] **Step 2:** `SECURITY.md` gets a `test-queue` table in the form of the others: Reads (its configuration file,
   the queue's state files), Writes (the state directory's lock, holder and ticket files), Runs (the wrapped command,
   unchanged, in its own process group), Network (none), Sends (nothing); and a line on the hook: it rewrites a Bash
   command only in `bypassPermissions` sessions and only by prefixing `test-queue run … -- bash -c`.
-- [ ] **Step 3:** `AGENTS.md`'s layout lists `bin/test-queue`, `lib/paseo_tools/test_queue.py`, `hooks/` and
+- [x] **Step 3:** `AGENTS.md`'s layout lists `bin/test-queue`, `lib/paseo_tools/test_queue.py`, `hooks/` and
   `docs/plans/`; `CONTRIBUTING.md` says four commands.
-- [ ] **Step 4:** All six checks of `CONTRIBUTING.md` → green. Commit:
+- [x] **Step 4:** All six checks of `CONTRIBUTING.md` → green. Commit:
   `git commit -m "docs: test-queue in the readme, the security tables and the layout"` with the named paths.
 
 ### Task 4: The pull request
 
-- [ ] **Step 1:** Push `feat/test-queue` and open a pull request against `main`; its body says what changes for users
+- [x] **Step 1:** Push `feat/test-queue` and open a pull request against `main`; its body says what changes for users
   (the hook wraps heavy commands in `bypassPermissions` sessions once the plugin updates; `./install.sh` puts
   `test-queue` on `PATH` for cron lines) and how it was tested.
-- [ ] **Step 2:** The completion report names the pull request; the maintainer merges.
+- [x] **Step 2:** The completion report names the pull request; the maintainer merges.
 
 ### After the merge (people, not the implementer)
 
 - [ ] Each machine updates the plugin and runs `./install.sh` from its clone.
+- [ ] Each machine creates `~/.config/test-queue/config.json` (`{}` is enough): without it the hook wraps nothing.
 - [ ] Each hourly CI's cron line is wrapped: `test-queue run --last --label "<name> CI" -- <its command>`.
 - [ ] Each machine's configuration file adds the patterns of commands its repositories run that start a heavy suite
   under another name (a landing command that runs a check, for example); the defaults stay generic.
