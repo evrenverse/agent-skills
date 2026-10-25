@@ -139,9 +139,11 @@ queue per repository still lets each of them take the whole machine at once.
     `bunx vitest run src/a.test.ts src/b.test.ts`, `playwright test e2e/one.spec.ts`, `pytest tests/test_one.py`. The
     table also records `echo "bun run check"` as heavy: matching is textual, and a false positive only queues.
   - `test_hook_wraps_a_heavy_command`: payload with `permission_mode: "bypassPermissions"`, `tool_name: "Bash"`,
-    `tool_input: {"command": "bun run check", "description": "d", "timeout": 600000, "run_in_background": true}` →
+    `tool_input: {"command": "bun run check", "description": "d", "timeout": 120000, "run_in_background": true}` →
     `hookSpecificOutput.hookEventName == "PreToolUse"`, `permissionDecision == "allow"`, `updatedInput.command ==
-    wrap("bun run check", <label>, <executable>)`, the other three fields unchanged.
+    wrap("bun run check", <label>, <executable>)`, the other three fields unchanged. The same payload with
+    `run_in_background: false` and no or a shorter `timeout` → `updatedInput.timeout == 600000`, the Bash tool's
+    maximum, since a wait in the queue counts against it.
   - `test_wrapped_command_runs_as_written`: `bash -c` of `wrap(cmd, …)` with a stand-in executable that runs its
     arguments after `--` prints the same as `bash -c cmd` for commands with `'`, `"`, `$HOME`, a backtick, a newline,
     a heredoc and `cd sub && pwd`.
@@ -171,7 +173,8 @@ queue per repository still lets each of them take the whole machine at once.
   `install.sh` (its comment if it names the tools)
 
 - [ ] **Step 1:** `README.md` gets a `test-queue` section: what it is for, `run`, `run --last` for cron lines,
-  `status`, the hook and its `bypassPermissions` limit, the configuration file with its three keys and defaults,
+  `status`, the hook and its `bypassPermissions` limit, that a foreground call whose wait and run pass the Bash tool's
+  ten minutes ends there (heavy runs belong in the background), the configuration file with its three keys and defaults,
   `TEST_QUEUE_SLOTS`, and an example cron line
   `7 * * * * test-queue run --last --label "<name> CI" -- <the CI's command>`.
 - [ ] **Step 2:** `SECURITY.md` gets a `test-queue` table in the form of the others: Reads (its configuration file,
@@ -194,4 +197,6 @@ queue per repository still lets each of them take the whole machine at once.
 
 - [ ] Each machine updates the plugin and runs `./install.sh` from its clone.
 - [ ] Each hourly CI's cron line is wrapped: `test-queue run --last --label "<name> CI" -- <its command>`.
+- [ ] Each machine's configuration file adds the patterns of commands its repositories run that start a heavy suite
+  under another name (a landing command that runs a check, for example); the defaults stay generic.
 - [ ] A repository that queues its heavy runs itself drops its own queue in a change of its own.
