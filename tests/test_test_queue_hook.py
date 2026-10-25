@@ -10,6 +10,7 @@ import io
 import json
 import os
 import subprocess
+import time
 from pathlib import Path
 from typing import Any
 from unittest import mock
@@ -38,6 +39,15 @@ HEAVY = [
     "pytest",
     # Matching is textual, and a false positive only queues.
     'echo "bun run check"',
+    # A directory or a flag's value is no test file: these run the whole suite.
+    "pytest tests/",
+    "pytest tests",
+    "python -m pytest tests",
+    "pytest -n auto",
+    "playwright test --project chromium",
+    "vitest run --reporter dot",
+    "bun test",
+    "bun test --coverage",
 ]
 LIGHT = [
     "git status",
@@ -47,6 +57,7 @@ LIGHT = [
     "bunx vitest run src/a.test.ts src/b.test.ts",
     "playwright test e2e/one.spec.ts",
     "pytest tests/test_one.py",
+    "bun test src/a.test.ts",
 ]
 # Commands whose quoting a wrapped call must keep: wrapped, `bash -c` does what it does without.
 QUOTING = [
@@ -116,6 +127,27 @@ class PatternTests(HookCase):
         for command in LIGHT:
             with self.subTest(light=command):
                 self.assertFalse(test_queue.is_heavy(command, test_queue.DEFAULT_PATTERNS))
+
+    def test_patterns_do_not_backtrack_exponentially(self) -> None:
+        # The hook runs before every Bash call: a long run of flags, matched or not, must stay cheap. A slow
+        # pattern takes minutes here, not milliseconds.
+        flags = " ".join(f"--flag{n}" for n in range(40))
+        for command in (
+            f"bun run {flags} x",
+            f"bun run {flags} check",
+            f"turbo run {flags} lint",
+            f"pytest {flags} tests/test_one.py",
+            f"pytest {flags}",
+            f"bun test {flags} src/a.test.ts",
+            f"vitest run {flags} run x",
+        ):
+            with self.subTest(command=command[:20] + "…" + command[-20:]):
+                took = []
+                for _ in range(5):
+                    start = time.perf_counter()
+                    test_queue.is_heavy(command, test_queue.DEFAULT_PATTERNS)
+                    took.append(time.perf_counter() - start)
+                self.assertLess(min(took), 0.01)
 
 
 class WrapTests(HookCase):

@@ -367,18 +367,22 @@ def main(argv: list[str] | None = None) -> int:
 
 # The hook
 
-# Regular expressions searched in the whole command. A suite is heavy; one file's run is not. Everything is
+# Regular expressions searched in the whole command. A suite is heavy; one test file's run is not. Matching is
 # textual: a false positive only queues, and a heavy run in an unusual spelling is missed (extend `patterns`).
 DEFAULT_PATTERNS: list[str] = [
     # A package script that runs a suite: `bun run check`, `pnpm run test:changed`, `bun run --cwd web test`.
-    # `ci:status` and `check:fast` are other scripts, so no `:` may follow `check`, `ci` or `e2e`.
-    r"\b(?:bun|npm|pnpm|yarn)\s+run\s+(?:--[\w-]+(?:=\S+|\s+\S+)?\s+)*"
+    # `ci:status` and `check:fast` are other scripts, so no `:` may follow `check`, `ci` or `e2e`. A flag's
+    # value never starts with `-`: else `--a --b …` reads two ways per flag, which takes exponential time.
+    r"\b(?:bun|npm|pnpm|yarn)\s+run\s+(?:--[\w-]+(?:=\S+|\s+(?!-)\S+)?\s+)*"
     r"(?:check|ci|e2e|test(?::[\w:-]+)?)(?![\w:-])",
     r"\b(?:npm|pnpm|yarn)\s+test(?![\w:-])",
     # `turbo run typecheck test --affected`: `test` among the task names, which are words, not flags.
     r"\bturbo\s+(?:run\s+)?(?:[\w:-]+\s+)*?test(?![\w-])",
-    # A runner without a file argument runs everything; only flags (`-x`, `--bail`) may follow it.
-    r"\b(?:vitest(?:\s+run)?|playwright\s+test|pytest)(?:\s+-\S*)*\s*(?=$|[;&|<>()\n]|\d[<>])",
+    # A test runner is light only when an argument looks like a test file (`a.test.ts`, `t.py::test_a`); bare,
+    # with flags and their values, or with a directory it runs a suite. Its arguments end at a shell operator.
+    r"\b(?:vitest(?:\s+run)?|playwright\s+test|pytest|bun\s+test)"
+    r"(?:[ \t]+(?![^\s;&|<>()]*\.(?:py|[cm]?[jt]sx?)(?![\w.]))[^\s;&|<>()]+)*"
+    r"[ \t]*(?=$|[;&|<>()\n]|\d[<>])",
 ]
 
 
