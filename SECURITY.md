@@ -2,8 +2,9 @@
 
 This repository holds two kinds of code. The skills are Markdown instructions: the agent that loads one carries them
 out with that agent's own permissions. The command-line tools in `bin/` and the scripts beside two skills are Python
-programs that run as you. This document lists what each of them may do, what it reads, writes, runs and sends, and how
-to narrow what spawned agents can do.
+programs that run as you. The plugin also declares one Claude Code hook, which runs `test-queue hook` before every Bash
+call; it is described with `test-queue` below. This document lists what each of them may do, what it reads, writes,
+runs and sends, and how to narrow what spawned agents can do.
 
 Paths below use the defaults: `~` is your home directory, Claude Code transcripts are found under `~/.claude/projects/`,
 under every `~/.config/claude-rotate/configs/*/projects/` and under `$CLAUDE_CONFIG_DIR/projects/`, Codex transcripts
@@ -48,7 +49,7 @@ endpoint or sets a User-Agent. None starts, stops or restarts the paseo daemon, 
 (`phandoff` and `pspawn` forbid `paseo restart`). When the daemon does not answer, `paseo-limit-watch` skips the pass,
 `paseo-notify` reports the ended watch and `paseo-title` logs the failed rename.
 
-The three tools run `paseo` (which talks to the local paseo daemon), `claude-rotate` and `claude`, each found on
+The three paseo tools run `paseo` (which talks to the local paseo daemon), `claude-rotate` and `claude`, each found on
 `PATH`, then in `~/.local/bin`, then in the newest Node under `~/.nvm`.
 
 ### `paseo-limit-watch`
@@ -108,6 +109,30 @@ agent's repository, and from saving a session. What still runs despite them: Cla
 its built-in plugins, without hooks. Managed policy settings of your organization still apply. `paseo-title` passes its
 own environment on unchanged.
 
+### `test-queue`
+
+| | |
+| --- | --- |
+| Reads | its configuration file (`$XDG_CONFIG_HOME/test-queue/config.json`, default `~/.config/test-queue/config.json`); the holder and ticket files of the state directory; the environment variables `TEST_QUEUE_SLOTS`, `TEST_QUEUE_DIR` and `TEST_QUEUE_SLOT`; with `hook`, the Bash call that Claude Code puts on stdin (command, working directory, permission mode) |
+| Writes | the state directory (`$TEST_QUEUE_DIR`, else `$XDG_STATE_HOME/test-queue`, default `~/.local/state/test-queue`): the lock files `slot-<n>.lock` and `waiting/<pid>.lock` (mode 600); while a command runs, its holder file `slot-<n>.json`; while a call waits, its ticket `waiting/<pid>.json`. A holder file and a ticket hold the label (by default the working directory's name and the first 60 characters of the command), the working directory, the pid and the start time; they go when their call ends, and a dead waiter's ticket goes when the next call finds it. `status` creates the directory and the lock files too. `hook` writes no file |
+| Runs | `run`: the wrapped command, unchanged and without a shell, in its own session (so its own process group) with the call's environment plus `TEST_QUEUE_SLOT=<label>`; SIGTERM, SIGINT and SIGHUP are passed on to that group. `status` and `hook` run nothing |
+| Network | none |
+| Sends | nothing. `hook` prints its answer to Claude Code on stdout |
+
+**The hook.** `hooks/hooks.json` makes Claude Code run `test-queue hook` before every Bash call of a session with the
+plugin enabled. It rewrites a command only in `bypassPermissions` sessions (its answer is "allow", which would skip the
+permission prompt of any other mode), only when the command matches one of the configuration's `patterns`, and only by
+prefixing `test-queue run --label … -- bash -c`, with the original command as bash's one argument. A foreground call
+also gets the Bash tool's longest timeout, 600000 ms. Any error, a malformed payload or a broken pattern included, gives
+no output and exit code 0, so the call runs as it was. Codex sessions are not wrapped.
+
+**A wrapped command is outside the session's Bash deny and ask rules.** Claude Code checks permission rules against the
+command the hook returns, and a Bash rule does not match inside `bash -c '…'`: Claude Code's
+[permissions page](https://code.claude.com/docs/en/permissions) says such a rule "isn't a security boundary around the
+program". The patterns are searched in the whole command, so `bun run test && git push` is wrapped as a whole and a
+rule against `git push` no longer sees it. If you rely on deny or ask rules, set `"patterns": []` in the configuration
+file: the hook then wraps nothing.
+
 ### Skill scripts and `install.sh`
 
 | Program | Reads | Writes | Runs | Network |
@@ -137,7 +162,8 @@ its model provider.
   }
   ```
 
-  Bash rules match the command as written, so treat them as a guard rail, not a sandbox.
+  Bash rules match the command as written, so treat them as a guard rail, not a sandbox. A rule that names a
+  command no longer matches it once the `test-queue` hook wraps it (see [`test-queue`](#test-queue)).
 - **On the remote.** Branch protection or a ruleset on `main` stops a push however the agent phrases it.
 - **A prompting mode.** You can spawn in a mode that asks before it acts. A detached agent then waits until someone
   answers its request (`paseo permit ls`).

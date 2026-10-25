@@ -15,7 +15,7 @@ cd agent-skills
 python3 -m unittest discover -s tests -t .
 ```
 
-`./install.sh` links the three commands in `bin/` into `~/.local/bin`. It replaces symlinks of the same name, so links
+`./install.sh` links the four commands in `bin/` into `~/.local/bin`. It replaces symlinks of the same name, so links
 that point into another clone then point into this one.
 
 ## Checks
