@@ -33,7 +33,9 @@ here-document bodies through `run`, as `test-queue run … -- bash -c '<command>
 counts against the call's timeout: a background call gets at least two hours, the most an unattended session
 allows; a foreground call keeps its own, since Claude Code moves it to the background when it is reached,
 unless CLAUDE_CODE_DISABLE_BACKGROUND_TASKS is set, and then it gets the Bash tool's longest, ten minutes. A
-pattern that does not compile is skipped; any other error means no output: the call runs as it was.
+pattern that does not compile is skipped; any other error means no output: the call runs as it was. So does
+a Bash deny or ask rule in the user or project settings that may match the command: Claude Code applies the
+rule, which a wrapped command would escape.
 
 State, one queue for all of a user's sessions and cron jobs: $TEST_QUEUE_DIR, else
 $XDG_STATE_HOME/test-queue, else ~/.local/state/test-queue, its directories made with mode 700. Configuration:
@@ -493,10 +495,58 @@ def wrap(command: str, label: str, executable: str) -> str:
     return f"{shlex.quote(executable)} run --label {shlex.quote(label)} -- bash -c {shlex.quote(command)}"
 
 
+def _bash_specs(cwd: str) -> list[str]:
+    """The specs of the Bash rules in `permissions.deny` and `permissions.ask` of the session's settings.
+
+    The files are the user's (`$CLAUDE_CONFIG_DIR/settings.json`, else `~/.claude/settings.json`) and the
+    project's `.claude/settings.json` and `.claude/settings.local.json`, under the git root of `cwd` (`cwd`
+    itself when git cannot say). The bare rule `Bash` comes as `*`. A file that does not exist adds nothing;
+    one that is unreadable, not JSON or not shaped like settings raises.
+    """
+    user = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+    try:
+        git = ["git", "-C", cwd, "rev-parse", "--show-toplevel"]
+        top = subprocess.run(git, capture_output=True, text=True, timeout=2, check=True).stdout.strip()
+        root = Path(top or cwd)
+    except (OSError, subprocess.SubprocessError):
+        root = Path(cwd)
+    project = root / ".claude"
+    specs: list[str] = []
+    for path in (user / "settings.json", project / "settings.json", project / "settings.local.json"):
+        if not path.exists():
+            continue
+        permissions = json.loads(path.read_text()).get("permissions", {})
+        for kind in ("deny", "ask"):
+            rules = permissions.get(kind, [])
+            if not isinstance(rules, list):
+                raise TypeError(f"{path}: permissions.{kind} is not a list")
+            for rule in rules:
+                if rule == "Bash":
+                    specs.append("*")
+                elif isinstance(rule, str) and rule.startswith("Bash(") and rule.endswith(")"):
+                    specs.append(rule[5:-1])
+    return specs
+
+
+def _matches(command: str, spec: str) -> bool:
+    """Whether the Bash rule `spec` may match `command`; wide on purpose, a false alarm only skips the queue.
+
+    With a `*`, the text before it (a `:` before the `*` dropped) must occur anywhere in the raw command:
+    behind `&&`, in quotes, in a here-document. Without one, the whole spec must. A whitespace run counts as
+    one space.
+    """
+    command, spec = (re.sub(r"\s+", " ", text) for text in (command, spec))
+    if "*" in spec:
+        spec = spec.split("*", 1)[0].removesuffix(":").strip()
+    return spec in command
+
+
 def hook(payload: Any, config: Config, executable: str) -> dict[str, Any] | None:
     """The PreToolUse answer for a Bash call that is heavy and in a bypassPermissions session, else None.
 
-    Without the configuration file the hook is off: None. Any error, a malformed payload included, gives None:
+    Without the configuration file the hook is off: None. So is a command that a Bash deny or ask rule of the
+    session's settings matches, and Claude Code then applies the rule, which a wrapped command would escape;
+    settings that cannot be read count as such a rule. Any error, a malformed payload included, gives None:
     the call runs as it was.
     """
     with contextlib.suppress(Exception):  # this runs before every Bash call and must never fail one
@@ -509,6 +559,8 @@ def hook(payload: Any, config: Config, executable: str) -> dict[str, Any] | None
         queued = command.startswith((executable, shlex.quote(executable)))
         if queued or not is_heavy(command, config.patterns):
             return None
+        if any(_matches(command, spec) for spec in _bash_specs(payload["cwd"])):
+            return None  # Claude Code checks its rules against the wrapped command, which they do not match
         updated = {**tool_input, "command": wrap(command, default_label(payload["cwd"], command), executable)}
         timeout = tool_input.get("timeout") or 0  # the wait in the queue counts against it
         if tool_input.get("run_in_background"):

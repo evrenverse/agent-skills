@@ -218,12 +218,20 @@ that does not compile is skipped; any other error gives no output, and the call 
   longer, up to two hours. When `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS` is set to anything but `0`, a foreground call
   cannot move to the background; the hook then raises its timeout to ten minutes, the Bash tool's longest, and the call
   ends there if the wait and the run take longer.
-- **Deny and ask rules do not see inside.** Claude Code checks permission rules against the command the hook returns,
-  and a Bash rule does not match inside `bash -c '…'`; its
-  [permissions page](https://code.claude.com/docs/en/permissions) calls such a rule one that "isn't a security
-  boundary around the program". A wrapped command is therefore outside the session's Bash deny and ask rules. The
-  patterns are searched in the whole command, so `bun run test && git push` is wrapped as a whole. If you rely on
-  such rules, do not create the configuration file, or set `"patterns": []` in it: the hook then wraps nothing.
+- **Deny and ask rules.** Claude Code checks permission rules against the command the hook returns, and a Bash rule
+  does not match inside `bash -c '…'`; its [permissions page](https://code.claude.com/docs/en/permissions) calls such a
+  rule one that "isn't a security boundary around the program". So the hook leaves a command alone when a Bash deny or
+  ask rule of the session may match it: it runs unqueued, and Claude Code's own rule applies as without the hook. The
+  rules are the `Bash(…)` entries (and a bare `Bash`) of `permissions.deny` and `permissions.ask` in the user settings
+  (`$CLAUDE_CONFIG_DIR/settings.json`, else `~/.claude/settings.json`) and in the project's `.claude/settings.json` and
+  `.claude/settings.local.json`; the project is the git root of the call's working directory, found with
+  `git rev-parse --show-toplevel`, or that directory when git cannot say. The match is wide on purpose, since a false
+  alarm only skips the queue: the text of a rule before its first `*` (a `:*` counts as `*`) found anywhere in the
+  command, behind `&&` or `;`, in `$(…)`, in quotes or in a here-document, is a match; a rule without a `*` must occur
+  whole; `Bash(*)` and a bare `Bash` match every command. A settings file that exists but cannot be read, is not JSON or an object, or whose
+  `deny` or `ask` is not a list also means: do not wrap. **Not read:** managed settings and rules given with
+  `--disallowedTools` on the command line; a wrapped command stays outside those. If you rely on them, do not create
+  the configuration file, or set `"patterns": []` in it: the hook then wraps nothing.
 - **A child shell.** A wrapped command runs in its own `bash -c`, under bash even in a session whose shell is zsh: a
   `cd` in it does not carry over to the session's next Bash call, and the session's shell functions and aliases are not
   available in it.
@@ -289,7 +297,7 @@ Spawned agents run without permission prompts by team default, and the `phandoff
 pushes. `paseo-title` sends about 2 000 characters of each agent's opening conversation to Anthropic, whichever
 provider the agent runs on. `paseo-limit-watch`, `paseo-notify` and `test-queue` open no network connection of their
 own. Once you create its configuration file, the plugin's `test-queue` hook rewrites heavy Bash commands in
-`bypassPermissions` sessions, which takes them out of the session's Bash deny and ask rules (see
+`bypassPermissions` sessions, unless a Bash deny or ask rule of the session may match the command (see
 [test-queue](#test-queue)). [SECURITY.md](SECURITY.md) lists, per skill and tool, what it reads, writes, runs and
 sends, how to restrict spawned agents, and how to report a vulnerability.
 

@@ -310,6 +310,132 @@ class HookTests(HookCase):
         self.assertIsNotNone(test_queue.hook(payload("make check"), config, EXECUTABLE))
 
 
+class RuleTests(HookCase):
+    """A Bash deny or ask rule of the session's settings keeps the hook from wrapping what it matches."""
+
+    COMMAND = "bun run check && infisical export --env=dev"
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.project = self.home / "project"  # a git repository; the payload's cwd is a subdirectory of it
+        self.cwd = self.project / "pkg" / "src"
+        self.cwd.mkdir(parents=True)
+        subprocess.run(["git", "init", "-q"], cwd=self.project, check=True, capture_output=True)
+
+    def rules(self, *rules: Any, kind: str = "deny", at: Path | None = None) -> None:
+        """Write `rules` as the `kind` rules of the project's `.claude/settings.json`, or of the file `at`."""
+        write_json(at or self.project / ".claude" / "settings.json", {"permissions": {kind: list(rules)}})
+
+    def decide_in(self, command: str, cwd: Path | None = None) -> dict[str, Any] | None:
+        """The hook's answer to `command` run in `cwd` (the project's subdirectory by default)."""
+        return self.decide(payload(command, cwd=str(cwd or self.cwd)))
+
+    def test_without_a_rule_the_command_is_wrapped(self) -> None:
+        self.assertIsNotNone(self.decide_in(self.COMMAND))
+
+    def test_project_rule(self) -> None:
+        self.rules("Bash(infisical export *)")
+        self.assertIsNone(self.decide_in(self.COMMAND))
+        self.assertEqual(self.through_main(json.dumps(payload(self.COMMAND, cwd=str(self.cwd)))), (0, "", ""))
+
+    def test_user_rule(self) -> None:
+        self.rules("Bash(infisical export *)", at=self.home / ".claude" / "settings.json")
+        self.assertIsNone(self.decide_in(self.COMMAND))
+
+    def test_user_rule_under_claude_config_dir(self) -> None:
+        os.environ["CLAUDE_CONFIG_DIR"] = str(self.home / "elsewhere")
+        self.rules("Bash(infisical export *)", at=self.home / ".claude" / "settings.json")
+        self.assertIsNotNone(self.decide_in(self.COMMAND))  # the home's file is not the one read now
+        self.rules("Bash(infisical export *)", at=self.home / "elsewhere" / "settings.json")
+        self.assertIsNone(self.decide_in(self.COMMAND))
+
+    def test_local_settings(self) -> None:
+        self.rules("Bash(infisical export *)", at=self.project / ".claude" / "settings.local.json")
+        self.assertIsNone(self.decide_in(self.COMMAND))
+
+    def test_ask_rule(self) -> None:
+        self.rules("Bash(infisical export *)", kind="ask")
+        self.assertIsNone(self.decide_in(self.COMMAND))
+
+    def test_allow_rule_does_not_count(self) -> None:
+        self.rules("Bash(*)", kind="allow")
+        self.assertIsNotNone(self.decide_in(self.COMMAND))
+
+    def test_bare_bash_matches_every_command(self) -> None:
+        self.rules("Bash")
+        self.assertIsNone(self.decide_in(self.COMMAND))
+
+    def test_rules_of_other_tools_do_not_count(self) -> None:
+        self.rules("Read(./x)", "WebFetch(domain:example.com)", "mcp__server__tool", "Bashful(*)", 5, None)
+        self.assertIsNotNone(self.decide_in(self.COMMAND))
+
+    def test_matching(self) -> None:
+        cases = [  # (spec, command, matches)
+            ("git push --force:*", "bun run check; git push --force origin x", True),
+            ("git push *", "bun run check && git push origin x", True),
+            ("git push *", "bun run check | git push", True),
+            ("git push *", "bun run check; echo $(git push)", True),
+            ("git push *", "bun run check; echo 'git push x'", True),
+            ("git push *", "bun run check <<EOF\ngit push x\nEOF", True),
+            ("git  push   *", "bun run check;git\tpush\n  origin", True),
+            ("git push *", "bun run check && git pull", False),
+            ("git push *", "bun run check", False),
+            ("*", "bun run check", True),
+            ("* --version", "bun run check", True),
+            ("infisical export", "bun run check && infisical export --env=dev", True),
+            ("infisical export", "bun run check && infisical show", False),
+            ("infisical  export", "bun run check && infisical export", True),
+            ("bun run check && git push", "bun run check && git pull", False),
+        ]
+        for spec, command, matches in cases:
+            with self.subTest(spec=spec, command=command):
+                self.rules(f"Bash({spec})")
+                self.assertEqual(self.decide_in(command) is None, matches)
+
+    def test_unusable_settings_mean_do_not_wrap(self) -> None:
+        for name in ("settings.json", "settings.local.json"):
+            path = self.project / ".claude" / name
+            for text in ("{", "", "[]", '"x"', '{"permissions": []}', '{"permissions": {"deny": "Bash"}}'):
+                with self.subTest(file=name, text=text):
+                    path.parent.mkdir(exist_ok=True)
+                    path.write_text(text)
+                    self.assertIsNone(self.decide_in(self.COMMAND))
+                    self.assertEqual(
+                        self.through_main(json.dumps(payload(self.COMMAND, cwd=str(self.cwd)))), (0, "", "")
+                    )
+            path.unlink()
+        for text in ("{", '{"permissions": {"ask": {}}}'):
+            with self.subTest(file="user settings", text=text):
+                (self.home / ".claude").mkdir(exist_ok=True)
+                (self.home / ".claude" / "settings.json").write_text(text)
+                self.assertIsNone(self.decide_in(self.COMMAND))
+        (self.home / ".claude" / "settings.json").unlink()
+        with self.subTest(file="a directory"):
+            (self.project / ".claude" / "settings.json").mkdir()
+            self.assertIsNone(self.decide_in(self.COMMAND))
+
+    def test_settings_without_rules_are_fine(self) -> None:
+        for settings in ({}, {"permissions": {}}, {"permissions": {"deny": [], "ask": []}}, {"model": "x"}):
+            with self.subTest(settings=settings):
+                write_json(self.project / ".claude" / "settings.json", settings)
+                self.assertIsNotNone(self.decide_in(self.COMMAND))
+
+    def test_cwd_outside_a_git_repository_is_the_root(self) -> None:
+        plain = self.home / "plain"
+        plain.mkdir()
+        self.rules("Bash(infisical export *)", at=plain / ".claude" / "settings.json")
+        self.assertIsNone(self.decide_in(self.COMMAND, plain))
+
+    def test_cwd_is_the_root_when_git_fails(self) -> None:
+        self.rules("Bash(infisical export *)")  # at the git root, which cannot be found now
+        for failure in (subprocess.TimeoutExpired("git", 2), FileNotFoundError("git")):
+            with self.subTest(failure=failure), mock.patch.object(subprocess, "run", side_effect=failure):
+                self.assertIsNotNone(self.decide_in(self.COMMAND))
+                self.rules("Bash(infisical export *)", at=self.cwd / ".claude" / "settings.json")
+                self.assertIsNone(self.decide_in(self.COMMAND))
+                (self.cwd / ".claude" / "settings.json").unlink()
+
+
 class MainHookTests(HookCase):
     def test_main_prints_the_result(self) -> None:
         code, out, err = self.through_main(json.dumps(payload()))
