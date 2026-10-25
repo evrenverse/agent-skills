@@ -9,8 +9,10 @@ import contextlib
 import io
 import json
 import os
+import re
 import subprocess
 import time
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 from unittest import mock
@@ -333,6 +335,11 @@ class MainHookTests(HookCase):
                 write_json(test_queue.config_path(), {"patterns": patterns, "slots": 2})
                 config = test_queue.load_config()
                 self.assertEqual((config.patterns, config.slots), (test_queue.DEFAULT_PATTERNS, 2))
+
+    def test_readme_example_holds_the_defaults(self) -> None:
+        blocks = re.findall(r"```json\n(.*?)```", (ROOT / "README.md").read_text(), re.DOTALL)
+        (example,) = [json.loads(block) for block in blocks if '"patterns"' in block]
+        self.assertEqual(example, asdict(test_queue.Config()))
 
     def test_declared_hook_runs(self) -> None:
         declared = json.loads((ROOT / "hooks" / "hooks.json").read_text())["hooks"]["PreToolUse"]

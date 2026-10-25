@@ -2,6 +2,25 @@
 
 **Status:** approved by the maintainer on 2026-10-25; implemented on this branch, finished by a pull request.
 
+## As built
+
+The branch differs from the tasks below in these points:
+
+- **The ticket lock instead of pid liveness.** A waiting call holds the lock of `waiting/<pid>.lock` while its ticket
+  exists; a ticket whose lock is free is dead, whatever process has its pid now.
+- **SIGHUP and SIGQUIT** are forwarded to the command and end the wait, beside SIGTERM and SIGINT. A signal ignored
+  when the call starts (nohup) stays ignored.
+- **The opt-in.** The hook wraps only once the configuration file exists; a file holding `{}` turns on the defaults.
+- **Quoted text is ignored.** The patterns are matched outside quoted strings and here-document bodies, so
+  `echo "bun run check"` is light; when the quoting does not parse, the raw text counts.
+- **The timeout rule.** A background call gets a timeout of at least 7,200,000 ms. A foreground call keeps its own,
+  since Claude Code moves it to the background at its timeout; only when `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS` is
+  set does it get 600,000 ms.
+- **Fail-open.** A `run` that cannot use the state directory prints one line to stderr and runs the command unqueued.
+- **Nested only while the holder holds.** A call runs at once only while the call named by its `TEST_QUEUE_HOLDER`
+  still holds its slot.
+- **Codex is not wrapped:** its command hooks document no exec-form `args`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or
 > superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
