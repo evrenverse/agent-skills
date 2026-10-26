@@ -36,10 +36,7 @@ allows; a foreground call keeps its own, since Claude Code moves it to the backg
 unless CLAUDE_CODE_DISABLE_BACKGROUND_TASKS is set, and then it gets the Bash tool's longest, ten minutes. A
 pattern that does not compile is skipped; any other error means no output: the call runs as it was. So does
 a Bash deny or ask rule in the user or project settings that may match the command: Claude Code applies the
-rule, which a wrapped command would escape. A repository listed in `self_queued` is left alone too, its
-worktrees included (the main checkout's root counts, as for the settings): its own scripts already send their
-heavy steps through `run`, so wrapping a whole `bun run check` would hold a slot during its light steps (lint,
-type checks) as well.
+rule, which a wrapped command would escape.
 
 State, one queue for all of a user's sessions and cron jobs: $TEST_QUEUE_DIR, else
 $XDG_STATE_HOME/test-queue, else ~/.local/state/test-queue, its directories made with mode 700. Configuration:
@@ -96,7 +93,6 @@ class Config:
     # A lambda, so the name resolves when a Config is made: the hook's section at the end defines it.
     patterns: list[str] = field(default_factory=lambda: list(DEFAULT_PATTERNS))
     last_wait_max_s: int = 3600
-    self_queued: list[str] = field(default_factory=list)  # repository roots whose scripts queue themselves
 
 
 def load_config() -> Config:
@@ -109,8 +105,6 @@ def load_config() -> Config:
         config = Config()
     if not isinstance(config.patterns, list) or not all(isinstance(p, str) for p in config.patterns):
         config.patterns = list(DEFAULT_PATTERNS)
-    if not isinstance(config.self_queued, list) or not all(isinstance(p, str) for p in config.self_queued):
-        config.self_queued = []
     with contextlib.suppress(ValueError):
         config.slots = int(os.environ.get("TEST_QUEUE_SLOTS") or config.slots)
     config.slots = max(1, config.slots)
@@ -572,8 +566,8 @@ def hook(payload: Any, config: Config, executable: str) -> dict[str, Any] | None
 
     Without the configuration file the hook is off: None. So is a command that a Bash deny or ask rule of the
     session's settings matches, and Claude Code then applies the rule, which a wrapped command would escape;
-    settings that cannot be read count as such a rule. So is a call in a repository listed in `self_queued`.
-    Any error, a malformed payload included, gives None: the call runs as it was.
+    settings that cannot be read count as such a rule. Any error, a malformed payload included, gives None:
+    the call runs as it was.
     """
     with contextlib.suppress(Exception):  # this runs before every Bash call and must never fail one
         if not config_path().exists():
@@ -585,10 +579,7 @@ def hook(payload: Any, config: Config, executable: str) -> dict[str, Any] | None
         queued = command.startswith((executable, shlex.quote(executable)))
         if queued or not is_heavy(command, config.patterns):
             return None
-        dirs = _project_dirs(payload["cwd"])
-        if {d.resolve() for d in dirs} & {Path(root).resolve() for root in config.self_queued}:
-            return None  # its own scripts queue their heavy steps
-        if any(_matches(command, spec) for spec in _bash_specs(dirs)):
+        if any(_matches(command, spec) for spec in _bash_specs(_project_dirs(payload["cwd"]))):
             return None  # Claude Code checks its rules against the wrapped command, which they do not match
         updated = {**tool_input, "command": wrap(command, default_label(payload["cwd"], command), executable)}
         timeout = tool_input.get("timeout") or 0  # the wait in the queue counts against it
