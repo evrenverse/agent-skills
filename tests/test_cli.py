@@ -2,6 +2,7 @@
 
 import os
 import subprocess
+import sys
 import time
 from pathlib import Path
 from unittest import mock
@@ -56,6 +57,11 @@ class RunTests(TempHome):
 
     def test_input_reaches_stdin(self) -> None:
         self.assertEqual(cli.run(["cat"], input="hello").stdout, "hello")
+
+    def test_env_is_the_childs_environment(self) -> None:
+        show = "import os; print(os.environ.get('PASEO_AGENT_ID'), 'HOME' in os.environ)"
+        proc = cli.run([sys.executable, "-c", show], env={"PASEO_AGENT_ID": "sender"})
+        self.assertEqual(proc.stdout, "sender False\n")
 
     def test_stdin_is_closed_without_input(self) -> None:
         # Without a closed stdin `cat` would wait for the terminal; cron has none.

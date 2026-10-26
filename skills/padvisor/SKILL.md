@@ -93,12 +93,13 @@ a confident one-sided answer, which is the failure mode this skill exists to avo
 paseo-notify <advisor-id>
 ```
 
-It returns at once. One message arrives in this session when the advisor stops: `finished its
-turn` → it answered (the message carries its last activity lines), `is waiting for a permission` →
-a request is waiting on you, `stopped with an error` → say so and read its logs; do not re-spawn
-silently. A usage limit does not wake you: `paseo-limit-watch` resumes the advisor and re-arms the
-watch, where its cron line is installed (see the README); without it, check the advisor yourself after
-the reset. No polling, no `sleep` loop, no Monitor. Finish any other work first, then end your turn.
+It returns at once. One message arrives in this session when the advisor stops, as an agent
+message from the advisor that starts with `[paseo-notify]`: `finished its turn` → it answered (the
+message carries its last activity lines), `is waiting for a permission` → a request is waiting on
+you, `stopped with an error` → say so and read its logs; do not re-spawn silently. A usage limit
+does not wake you: `paseo-limit-watch` resumes the advisor and re-arms the watch, where its cron
+line is installed (see the README); without it, check the advisor yourself after the reset. No
+polling, no `sleep` loop, no Monitor. Finish any other work first, then end your turn.
 
 Outside paseo (no `$PASEO_AGENT_ID`) run `paseo wait <advisor-id> --json` with
 `run_in_background: true` instead — a foreground Bash call caps at 10 minutes, an advisor on high

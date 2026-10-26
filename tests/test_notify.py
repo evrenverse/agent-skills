@@ -78,7 +78,7 @@ class NotifyCase(TempHome):
             patch.start()
             self.addCleanup(patch.stop)
 
-    def paseo(self, **replies: subprocess.CompletedProcess[str]) -> FakeRun:
+    def paseo(self, **replies: Any) -> FakeRun:
         """Fake `cli.run`: both agents exist and `send` works; `replies` override one answer by name.
 
         `caller` and `child` stand for `paseo inspect <that agent>`, any other name for its subcommand.
@@ -103,6 +103,14 @@ class NotifyCase(TempHome):
     @staticmethod
     def sent(fake: FakeRun) -> list[list[str]]:
         return [call for call in fake.calls if call[1] == "send"]
+
+    @staticmethod
+    def send_envs(fake: FakeRun) -> list[dict[str, str]]:
+        """The environment of each `paseo send`; paseo takes the sender from its PASEO_AGENT_ID."""
+        return [kw["env"] for call, kw in zip(fake.calls, fake.kwargs, strict=True) if call[1] == "send"]
+
+    def senders(self, fake: FakeRun) -> list[str | None]:
+        return [env.get("PASEO_AGENT_ID") for env in self.send_envs(fake)]
 
 
 class PathTests(NotifyCase):
@@ -146,9 +154,29 @@ class SendTests(NotifyCase):
         self.assertFalse(notify.send(CALLER, CHILD, "finished its turn."))
         self.assertEqual(self.sent(fake), [])
 
+    def test_the_watched_agent_is_the_sender(self) -> None:
+        """The caller gets an agent message from the agent it waits for, which the Paseo app shows collapsed,
+        not a turn that looks as if the user typed it. An inherited PASEO_AGENT_ID is not the sender."""
+        fake = self.paseo()
+        with mock.patch.dict(os.environ, {"PASEO_AGENT_ID": SESSION}):
+            self.assertTrue(notify.send(CALLER, CHILD, "finished its turn."))
+        self.assertEqual(self.senders(fake), [CHILD])
+        self.assertEqual(self.send_envs(fake)[0]["HOME"], str(self.home))  # the rest of the environment stays
+
+    def test_a_refused_sender_sends_the_same_message_as_a_plain_turn(self) -> None:
+        """A daemon without agent message provenance refuses a sender; the message must not be lost."""
+        refused = done("", 1, "Update the Paseo host to send messages with agent provenance.")
+        fake = self.paseo(send=[refused, done()])
+        with mock.patch.dict(os.environ, {"PASEO_AGENT_ID": SESSION}):
+            self.assertTrue(notify.send(CALLER, CHILD, "finished its turn."))
+        first, second = self.sent(fake)
+        self.assertEqual(first, second)
+        self.assertEqual(self.senders(fake), [CHILD, None])
+
     def test_a_failed_send_is_not_delivered(self) -> None:
-        self.paseo(send=done("", 1, "connection refused"))
+        fake = self.paseo(send=done("", 1, "connection refused"))
         self.assertFalse(notify.send(CALLER, CHILD, "finished its turn."))
+        self.assertEqual(self.senders(fake), [CHILD, None])
 
 
 class PendingOfTests(NotifyCase):

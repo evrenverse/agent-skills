@@ -5,9 +5,11 @@
 
 The caller arms it and ends its turn. A detached process blocks in ONE `paseo wait` (the daemon answers over
 its websocket when the agent stops: no polling, no model call, no tokens) and then `paseo send`s the caller
-one message: finished its turn / errored / needs a permission, with the agent's last activity. That is
-paseo's own notifyOnFinish minus the parent link: notifyOnFinish exists only for children made through
-paseo's MCP tools, and those archive with their parent, while team agents are detached on purpose.
+one message: finished its turn / errored / needs a permission, with the agent's last activity. It arrives as
+an agent message from the watched agent, which the Paseo app shows collapsed under that agent's name; a
+daemon that refuses the sender gets the same text as a plain turn. That is paseo's own notifyOnFinish minus
+the parent link: notifyOnFinish exists only for children made through paseo's MCP tools, and those archive
+with their parent, while team agents are detached on purpose.
 
 WHAT IT DOES NOT DO
   - Wake an archived caller: `paseo send` would unarchive it.
@@ -111,7 +113,10 @@ def _inspect(agent_id: str) -> dict | None:
 
 
 def send(caller: str, child: str, body: str) -> bool:
-    """Tell `caller` that `child` stopped. True if delivered; never to an archived or unknown caller."""
+    """Tell `caller` that `child` stopped, as an agent message from `child`, else as a plain turn.
+
+    True if delivered; never to an archived or unknown caller.
+    """
     info = _inspect(caller)
     if not info or info.get("Archived"):
         log(f"{child[:7]} -> {caller[:7]}: caller archived or unknown, nothing sent")
@@ -122,12 +127,24 @@ def send(caller: str, child: str, body: str) -> bool:
         f"Read more with `paseo logs {child} --tail 20`. After you `paseo send` it anything, "
         f"arm `paseo-notify {child}` again and end your turn."
     )
+    # paseo takes the sender of a message from PASEO_AGENT_ID only. With `child` as the sender the caller gets
+    # an agent message from it, which the Paseo app shows collapsed; without one, a turn as if the user typed
+    # it. A daemon without agent message provenance refuses the sender: then the same text as a plain turn.
     # --behavior steer: a caller in the middle of a turn gets it folded in instead of interrupted.
-    proc = cli.paseo("send", "--behavior", "steer", "--no-wait", caller, text)
+    argv = ("send", "--behavior", "steer", "--no-wait", caller, text)
+    plain = {k: v for k, v in os.environ.items() if k != "PASEO_AGENT_ID"}
+    proc = cli.paseo(*argv, env={**plain, "PASEO_AGENT_ID": child})
+    if proc.returncode != 0:
+        log(f"{child[:7]} -> {caller[:7]}: not sent as {child[:7]}, as a plain turn instead: {_why(proc)}")
+        proc = cli.paseo(*argv, env=plain)
     delivered = proc.returncode == 0
-    result = "sent" if delivered else "SEND FAILED " + (proc.stderr or proc.stdout).strip()[:200]
+    result = "sent" if delivered else "SEND FAILED " + _why(proc)
     log(f"{child[:7]} -> {caller[:7]}: {result}")
     return delivered
+
+
+def _why(proc: subprocess.CompletedProcess[str]) -> str:
+    return (proc.stderr or proc.stdout).strip()[:200]
 
 
 def parked_callers(child: str) -> list[str]:
@@ -215,9 +232,6 @@ def _detach() -> bool:
         os.closerange(3, open_max if 0 < open_max <= MAX_FD else MAX_FD)
     except BaseException:
         os._exit(1)
-    # Inherited from the caller, it makes `paseo send` wrap the message as the caller writing to itself
-    # (sourceAgentId); without it the message lands as a plain, visible turn.
-    os.environ.pop("PASEO_AGENT_ID", None)
     return True
 
 

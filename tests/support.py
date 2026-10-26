@@ -56,11 +56,12 @@ def run_script(
 class FakeRun:
     """Stand-in for `cli.run` that answers from a table and records the calls.
 
-    `responses` maps argv without the binary (argv[1:]) to a result. The longest key that is a prefix of the
-    call wins; an unmatched call returns exit 1 with an explanation instead of raising.
+    `responses` maps argv without the binary (argv[1:]) to a result, or to a list of results that answer its
+    calls in order. The longest key that is a prefix of the call wins; an unmatched call returns exit 1 with
+    an explanation instead of raising.
     """
 
-    def __init__(self, responses: dict[tuple[str, ...], subprocess.CompletedProcess[str]]) -> None:
+    def __init__(self, responses: dict[tuple[str, ...], Any]) -> None:
         self.responses = responses
         self.calls: list[list[str]] = []  # full argv of each call
         self.kwargs: list[dict[str, Any]] = []  # keyword arguments of each call
@@ -71,5 +72,6 @@ class FakeRun:
         rest = tuple(argv[1:])
         for key in sorted(self.responses, key=len, reverse=True):
             if rest[: len(key)] == key:
-                return self.responses[key]
+                reply = self.responses[key]
+                return reply.pop(0) if isinstance(reply, list) else reply
         return subprocess.CompletedProcess(argv, 1, "", f"FakeRun: no response for {rest!r}")

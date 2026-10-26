@@ -108,13 +108,13 @@ as in pspawn's step 2.
 paseo-notify <id-a>; paseo-notify <id-b>
 ```
 
-Each member's message arrives on its own. If one is in and the other is still out, end your turn
-again; the second message wakes you. `finished its turn` → it answered. `is waiting for a
-permission` → a request is waiting on you. `stopped with an error` → say so and read its logs; do
-not re-spawn silently. A usage limit does not wake you: `paseo-limit-watch` resumes the member and
-re-arms the watch, where its cron line is installed (see the README); without it, check the member
-yourself after the reset. Members routinely run 15–30 minutes. Never poll, never `sleep`, never send
-hurry-ups.
+Each member's message arrives on its own, as an agent message from that member that starts with
+`[paseo-notify]`. If one is in and the other is still out, end your turn again; the second message
+wakes you. `finished its turn` → it answered. `is waiting for a permission` → a request is waiting
+on you. `stopped with an error` → say so and read its logs; do not re-spawn silently. A usage
+limit does not wake you: `paseo-limit-watch` resumes the member and re-arms the watch, where its
+cron line is installed (see the README); without it, check the member yourself after the reset.
+Members routinely run 15–30 minutes. Never poll, never `sleep`, never send hurry-ups.
 
 Outside paseo (no `$PASEO_AGENT_ID`): `paseo wait <id-a> --json; paseo wait <id-b> --json` in ONE
 bash call with `run_in_background: true`, and read each `status` from the JSON, never the exit code.
