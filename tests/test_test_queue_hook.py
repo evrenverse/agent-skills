@@ -476,6 +476,44 @@ class RuleTests(HookCase):
                 (self.cwd / ".claude" / "settings.json").unlink()
 
 
+class SelfQueuedTests(HookCase):
+    """A repository in `self_queued` queues its own heavy steps: the hook leaves its calls alone."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.project, self.other = self.home / "project", self.home / "other"
+        for repo in (self.project, self.other):
+            (repo / "pkg").mkdir(parents=True)
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+        git = ["git", "-c", "user.name=t", "-c", "user.email=t@example.com"]
+        subprocess.run([*git, "commit", "-q", "--allow-empty", "-m", "init"], cwd=self.project, check=True)
+        self.worktree = self.home / "worktrees" / "topic"
+        subprocess.run(["git", "worktree", "add", "-q", str(self.worktree)], cwd=self.project, check=True)
+        self.config = test_queue.Config(self_queued=[f"{self.project}/"])
+
+    def test_self_queued_repository_and_its_worktree_are_not_wrapped(self) -> None:
+        cases = ((self.project / "pkg", False), (self.worktree, False), (self.other / "pkg", True))
+        for cwd, wrapped in cases:
+            with self.subTest(cwd=str(cwd.relative_to(self.home))):
+                answer = test_queue.hook(payload(cwd=str(cwd)), self.config, EXECUTABLE)
+                self.assertEqual(answer is not None, wrapped)
+
+    def test_claude_project_dir_counts(self) -> None:
+        plain = self.home / "plain"  # no git repository
+        plain.mkdir()
+        os.environ["CLAUDE_PROJECT_DIR"] = str(self.project)
+        self.assertIsNone(test_queue.hook(payload(cwd=str(plain)), self.config, EXECUTABLE))
+
+    def test_self_queued_comes_from_the_config(self) -> None:
+        write_json(test_queue.config_path(), {"self_queued": [str(self.project)]})
+        self.assertEqual(self.through_main(json.dumps(payload(cwd=str(self.worktree)))), (0, "", ""))
+        for value in (str(self.project), [str(self.project), 5], None):
+            with self.subTest(self_queued=value):
+                write_json(test_queue.config_path(), {"self_queued": value, "slots": 2})
+                config = test_queue.load_config()
+                self.assertEqual((config.self_queued, config.slots), ([], 2))
+
+
 class MainHookTests(HookCase):
     def test_main_prints_the_result(self) -> None:
         code, out, err = self.through_main(json.dumps(payload()))

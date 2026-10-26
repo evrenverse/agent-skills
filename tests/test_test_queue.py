@@ -139,6 +139,19 @@ class QueueTests(QueueCase):
         self.when("second")
         self.assertFalse((self.marks / "first.end").exists())  # the first still runs
 
+    def test_raised_slots_reach_a_waiting_call(self) -> None:
+        config = self.home / ".config" / "test-queue" / "config.json"
+        write_json(config, {"slots": 1})
+        self.start("first", seconds=30)
+        self.when("first")
+        self.ticket(self.start("second", seconds=30))
+        self.ticket(self.start("third"))
+        write_json(config, {"slots": 2})
+        self.when("second")
+        # One slot more lets one waiter go, the one ahead; the first still runs.
+        self.assertFalse((self.marks / "third.start").exists())
+        self.assertFalse((self.marks / "first.end").exists())
+
     def test_exit_code_passes_through(self) -> None:
         seven = "import os; raise SystemExit(7 if os.environ['TEST_QUEUE_SLOT'] == 'seven' else 1)"
         self.assertEqual(test_queue.main(["run", "--label", "seven", "--", sys.executable, "-c", seven]), 7)
