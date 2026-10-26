@@ -234,6 +234,10 @@ that does not compile is skipped; any other error gives no output, and the call 
   means: do not wrap. **Not read:** managed settings, rules passed with `--settings` and rules passed with
   `--disallowedTools` on the command line; a wrapped command stays outside those. If you rely on them, do not create the
   configuration file, or set `"patterns": []` in it: the hook then wraps nothing.
+- **Repositories that queue themselves.** A repository whose own scripts already send their heavy steps through
+  `test-queue run` goes into `self_queued`: the hook then leaves its calls alone, in its worktrees too (it compares the
+  main checkout's root, `$CLAUDE_PROJECT_DIR` and the git root with the listed roots). Wrapped whole, a `bun run check`
+  would hold a slot during its light steps (lint, type checks) as well.
 - **A child shell.** A wrapped command runs in its own `bash -c`, under bash even in a session whose shell is zsh: a
   `cd` in it does not carry over to the session's next Bash call, and the session's shell functions and aliases are not
   available in it.
@@ -261,8 +265,8 @@ the hook. A false positive only queues; a miss runs a suite beside the others.
 
 **Configuration.** `~/.config/test-queue/config.json` (`$XDG_CONFIG_HOME/test-queue/config.json` when that is set).
 Without it the hook is off and `run` uses the defaults. A broken file, or a `slots` or `last_wait_max_s` that is not a
-number, means the defaults for every key; a missing key, or `patterns` that are not a list of strings, means that key's
-default. This file sets every key to its default, ready to copy:
+number, means the defaults for every key; a missing key, or `patterns` or `self_queued` that are not a list of strings,
+means that key's default. This file sets every key to its default, ready to copy:
 
 ```json
 {
@@ -273,15 +277,17 @@ default. This file sets every key to its default, ready to copy:
     "\\bturbo\\s+(?:run\\s+)?(?:[\\w:-]+\\s+)*?test(?![\\w-])",
     "\\b(?:vitest(?:\\s+run)?|playwright\\s+test|pytest|bun\\s+test)(?:[ \\t]+(?![^\\s;&|<>()]*\\.(?:py|[cm]?[jt]sx?)(?![\\w.]))[^\\s;&|<>()]+)*[ \\t]*(?=$|[;&|<>()\\n]|\\d[<>])"
   ],
-  "last_wait_max_s": 3600
+  "last_wait_max_s": 3600,
+  "self_queued": []
 }
 ```
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `slots` | `1` | How many heavy runs go at once. The environment variable `TEST_QUEUE_SLOTS` overrides it; a value below 1 counts as 1. |
+| `slots` | `1` | How many heavy runs go at once. The environment variable `TEST_QUEUE_SLOTS` overrides it; a value below 1 counts as 1. A waiting call reads it again every second, so a raised count reaches the calls already waiting. |
 | `patterns` | the list above | Regular expressions (Python `re`) searched in the command outside its quoted strings and here-document bodies; only the hook reads them. They **replace** the defaults, so copy the ones you want to keep from the example above. Anything but a list of strings means the defaults; a pattern that does not compile is skipped. `[]` turns the hook's wrapping off. |
 | `last_wait_max_s` | `3600` | How many seconds a `--last` call lets every other waiter go first. |
+| `self_queued` | `[]` | Absolute paths of repository roots (main checkouts) whose own scripts call `test-queue run` for their heavy steps; only the hook reads them, and it does not wrap a call in such a repository or one of its worktrees. Anything but a list of strings means `[]`. |
 
 The queue's state lives in `$TEST_QUEUE_DIR`, else `$XDG_STATE_HOME/test-queue`, else
 `~/.local/state/test-queue`. A slot is a lock the kernel frees when its holder dies, whatever the signal. When `run`

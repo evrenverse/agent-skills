@@ -11,8 +11,9 @@ the command holding it and exits with the command's code, 128 + the signal when 
 
 A slot is a lock file held with flock(2) for the command's whole life, so the kernel frees it when its holder
 dies, SIGKILL included; the holder's label, directory and start sit beside it in `slot-<i>.json`, which counts
-only while the lock is held. A waiting call leaves a ticket `waiting/<pid>.json`, checks every second and
-takes a free slot only when fewer calls are ahead of it than slots are free. It holds the lock of
+only while the lock is held. A waiting call leaves a ticket `waiting/<pid>.json`, checks every second, reading
+`slots` again each time so that a raised count reaches the calls already waiting, and takes a free slot only
+when fewer calls are ahead of it than slots are free. It holds the lock of
 `waiting/<pid>.lock` from before the ticket exists until after it is gone, so the same rule holds: a ticket
 whose lock is free is dead and dropped, whatever process has its pid now. SIGTERM, SIGINT, SIGHUP and SIGQUIT
 during the wait remove the ticket and end the call with 128 + the signal. `--last` (for cron lines) lets every
@@ -35,7 +36,10 @@ allows; a foreground call keeps its own, since Claude Code moves it to the backg
 unless CLAUDE_CODE_DISABLE_BACKGROUND_TASKS is set, and then it gets the Bash tool's longest, ten minutes. A
 pattern that does not compile is skipped; any other error means no output: the call runs as it was. So does
 a Bash deny or ask rule in the user or project settings that may match the command: Claude Code applies the
-rule, which a wrapped command would escape.
+rule, which a wrapped command would escape. A repository listed in `self_queued` is left alone too, its
+worktrees included (the main checkout's root counts, as for the settings): its own scripts already send their
+heavy steps through `run`, so wrapping a whole `bun run check` would hold a slot during its light steps (lint,
+type checks) as well.
 
 State, one queue for all of a user's sessions and cron jobs: $TEST_QUEUE_DIR, else
 $XDG_STATE_HOME/test-queue, else ~/.local/state/test-queue, its directories made with mode 700. Configuration:
@@ -92,6 +96,7 @@ class Config:
     # A lambda, so the name resolves when a Config is made: the hook's section at the end defines it.
     patterns: list[str] = field(default_factory=lambda: list(DEFAULT_PATTERNS))
     last_wait_max_s: int = 3600
+    self_queued: list[str] = field(default_factory=list)  # repository roots whose scripts queue themselves
 
 
 def load_config() -> Config:
@@ -104,6 +109,8 @@ def load_config() -> Config:
         config = Config()
     if not isinstance(config.patterns, list) or not all(isinstance(p, str) for p in config.patterns):
         config.patterns = list(DEFAULT_PATTERNS)
+    if not isinstance(config.self_queued, list) or not all(isinstance(p, str) for p in config.self_queued):
+        config.self_queued = []
     with contextlib.suppress(ValueError):
         config.slots = int(os.environ.get("TEST_QUEUE_SLOTS") or config.slots)
     config.slots = max(1, config.slots)
@@ -243,9 +250,13 @@ def status(config: Config | None = None) -> tuple[list[Entry], list[Entry]]:
 
 
 def _wait(me: Entry, config: Config) -> tuple[int, int]:
-    """Wait until a slot is free for `me`; the slot and the descriptor holding its lock."""
+    """Wait until a slot is free for `me`; the slot and the descriptor holding its lock.
+
+    `slots` is read again at every check: a count raised while calls wait reaches them.
+    """
     shown = None
     while True:
+        config = replace(config, slots=load_config().slots)
         free, holders = _probe(config)
         now = time.time()
         mine = _queue_key(me, config, now)
@@ -515,16 +526,16 @@ def _project_dirs(cwd: str) -> list[Path]:
     return [Path(start), *dirs] if start else dirs
 
 
-def _bash_specs(cwd: str) -> list[str]:
+def _bash_specs(dirs: list[Path]) -> list[str]:
     """The specs of the Bash rules in `permissions.deny` and `permissions.ask` of the session's settings.
 
     The files are the user's (`$CLAUDE_CONFIG_DIR/settings.json`, else `~/.claude/settings.json`) and the
-    `.claude/settings.json` and `.claude/settings.local.json` of each of `_project_dirs(cwd)`: a union, since
-    a rule found anywhere only skips the queue. The bare rule `Bash` comes as `*`. A file that does not exist
-    adds nothing; one that is unreadable, not JSON or not shaped like settings raises.
+    `.claude/settings.json` and `.claude/settings.local.json` of each of `dirs` (`_project_dirs`): a union,
+    since a rule found anywhere only skips the queue. The bare rule `Bash` comes as `*`. A file that does not
+    exist adds nothing; one that is unreadable, not JSON or not shaped like settings raises.
     """
     files = [Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude") / "settings.json"]
-    for directory in _project_dirs(cwd):
+    for directory in dirs:
         files += [directory / ".claude" / "settings.json", directory / ".claude" / "settings.local.json"]
     specs: list[str] = []
     for path in dict.fromkeys(files):
@@ -561,8 +572,8 @@ def hook(payload: Any, config: Config, executable: str) -> dict[str, Any] | None
 
     Without the configuration file the hook is off: None. So is a command that a Bash deny or ask rule of the
     session's settings matches, and Claude Code then applies the rule, which a wrapped command would escape;
-    settings that cannot be read count as such a rule. Any error, a malformed payload included, gives None:
-    the call runs as it was.
+    settings that cannot be read count as such a rule. So is a call in a repository listed in `self_queued`.
+    Any error, a malformed payload included, gives None: the call runs as it was.
     """
     with contextlib.suppress(Exception):  # this runs before every Bash call and must never fail one
         if not config_path().exists():
@@ -574,7 +585,10 @@ def hook(payload: Any, config: Config, executable: str) -> dict[str, Any] | None
         queued = command.startswith((executable, shlex.quote(executable)))
         if queued or not is_heavy(command, config.patterns):
             return None
-        if any(_matches(command, spec) for spec in _bash_specs(payload["cwd"])):
+        dirs = _project_dirs(payload["cwd"])
+        if {d.resolve() for d in dirs} & {Path(root).resolve() for root in config.self_queued}:
+            return None  # its own scripts queue their heavy steps
+        if any(_matches(command, spec) for spec in _bash_specs(dirs)):
             return None  # Claude Code checks its rules against the wrapped command, which they do not match
         updated = {**tool_input, "command": wrap(command, default_label(payload["cwd"], command), executable)}
         timeout = tool_input.get("timeout") or 0  # the wait in the queue counts against it

@@ -113,21 +113,22 @@ own environment on unchanged.
 
 | | |
 | --- | --- |
-| Reads | its configuration file (`$XDG_CONFIG_HOME/test-queue/config.json`, default `~/.config/test-queue/config.json`); the holder and ticket files of the state directory; the environment variables `TEST_QUEUE_SLOTS`, `TEST_QUEUE_DIR` and `TEST_QUEUE_HOLDER`; with `hook`, whether the configuration file exists, the environment variables `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS`, `CLAUDE_CONFIG_DIR` and `CLAUDE_PROJECT_DIR`, the Bash call that Claude Code puts on stdin (command, timeout, working directory, permission mode), the user settings (`$CLAUDE_CONFIG_DIR/settings.json`, else `~/.claude/settings.json`) and the `.claude/settings.json` and `.claude/settings.local.json` under `$CLAUDE_PROJECT_DIR`, the git root and the main checkout's root for their Bash deny and ask rules, and the output of `git -C <working directory> rev-parse --path-format=absolute --show-toplevel --git-common-dir` (the two roots) |
+| Reads | its configuration file (`$XDG_CONFIG_HOME/test-queue/config.json`, default `~/.config/test-queue/config.json`); the holder and ticket files of the state directory; the environment variables `TEST_QUEUE_SLOTS`, `TEST_QUEUE_DIR` and `TEST_QUEUE_HOLDER`; with `hook`, whether the configuration file exists, the environment variables `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS`, `CLAUDE_CONFIG_DIR` and `CLAUDE_PROJECT_DIR`, the Bash call that Claude Code puts on stdin (command, timeout, working directory, permission mode), the user settings (`$CLAUDE_CONFIG_DIR/settings.json`, else `~/.claude/settings.json`) and the `.claude/settings.json` and `.claude/settings.local.json` under `$CLAUDE_PROJECT_DIR`, the git root and the main checkout's root for their Bash deny and ask rules, and the output of `git -C <working directory> rev-parse --path-format=absolute --show-toplevel --git-common-dir` (the two roots, also compared with `self_queued`) |
 | Writes | the state directory (`$TEST_QUEUE_DIR`, else `$XDG_STATE_HOME/test-queue`, default `~/.local/state/test-queue`) and its `waiting/` directory, both created with mode 700, as is any missing parent directory (a directory that already exists keeps its mode); in them the lock files `slot-<n>.lock` and `waiting/<pid>.lock` (mode 600); while a command runs, its holder file `slot-<n>.json`; while a call waits, its ticket `waiting/<pid>.json`. Holder files and tickets are written through a temporary `.tmp` name and follow the umask, not mode 600; they hold the label (by default the working directory's name and the first 60 characters of the command), the working directory, the pid and the start time. A call removes its own holder file or ticket when it ends, a SIGTERM, SIGINT, SIGHUP or SIGQUIT included. After a SIGKILL they stay: a reader ignores a holder file whose lock is free and the slot's next holder overwrites it, and the next waiting call or `status` removes a dead waiter's ticket and lock file. The slot lock files are never removed. `status` creates the directories and the lock files too, and so does `run` when it checks whether it runs inside a held slot. When `run` cannot create or lock these files, it fails open: it prints one line to stderr and runs the command unqueued. `hook` writes no file |
 | Runs | `run`: the wrapped command, unchanged and without a shell, in its own session (so its own process group) with the call's environment plus `TEST_QUEUE_SLOT=<label>` and `TEST_QUEUE_HOLDER=<the call's pid>`, or without both when it fails open; SIGTERM, SIGINT, SIGHUP and SIGQUIT are passed on to that group, unless the call ignored them when it started (nohup). `status` runs nothing; `hook` runs only that `git rev-parse` (2 s timeout), and only for a command it would otherwise wrap |
 | Network | none |
 | Sends | nothing. `hook` prints its answer to Claude Code on stdout |
 
 **The hook.** `hooks/hooks.json` makes Claude Code run `test-queue hook` before every Bash call of a session with the
-plugin enabled. It rewrites a command only once its configuration file exists (a file holding `{}` is enough; without
-it the hook prints nothing), only in `bypassPermissions` sessions (its answer is "allow", which would skip the
-permission prompt of any other mode), only when the command matches one of the configuration's `patterns` outside its
-quoted strings and here-document bodies, and only by prefixing `test-queue run --label … -- bash -c`, with the original
-command as bash's one argument. It also sets the call's timeout: a background call gets at least 7200000 ms (two
-hours); a foreground call keeps its own, unless `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS` is set to anything but `0`,
-which raises it to at least 600000 ms. A pattern that does not compile is skipped; any other error, a malformed payload
-included, gives no output and exit code 0, so the call runs as it was. Codex sessions are not wrapped.
+plugin enabled. It rewrites a command only once its configuration file exists (a file holding `{}` is enough; without it
+the hook prints nothing), only in `bypassPermissions` sessions (its answer is "allow", which would skip the permission
+prompt of any other mode), only when the command matches one of the configuration's `patterns` outside its quoted
+strings and here-document bodies and the call is not in a repository listed in `self_queued` (its worktrees included),
+and only by prefixing `test-queue run --label … -- bash -c`, with the original command as bash's one argument. It also
+sets the call's timeout: a background call gets at least 7200000 ms (two hours); a foreground call keeps its own, unless
+`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS` is set to anything but `0`, which raises it to at least 600000 ms. A pattern that
+does not compile is skipped; any other error, a malformed payload included, gives no output and exit code 0, so the call
+runs as it was. Codex sessions are not wrapped.
 
 **A command that a Bash deny or ask rule may match is not wrapped.** Claude Code checks permission rules against the
 command the hook returns, and a Bash rule does not match inside `bash -c '…'`: Claude Code's
