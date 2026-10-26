@@ -60,7 +60,7 @@ The three paseo tools run `paseo` (which talks to the local paseo daemon), `clau
 | Writes | `$XDG_STATE_HOME/paseo-limit-watch/state.json` (default `~/.local/state/paseo-limit-watch/state.json`), replaced atomically; removes the `~/.paseo/notify/` markers it handles. Log lines go to stdout. `--dry-run` writes, removes and sends nothing |
 | Runs | `paseo ls`, `paseo inspect`, `paseo logs` (agents without a Claude Code transcript), `paseo usage ls --refresh` (a Codex limit without a time), `paseo send`, `paseo agent reload` (`--reload` only); `claude-rotate status --json` (a Claude model limit without a time, and `--reload`); after a resume, a detached watch process (the code of `paseo-notify`) for each agent that was waiting |
 | Network | none of its own. `paseo usage ls --refresh` has paseo refresh the account quotas, and `claude-rotate status` may query its accounts' quotas |
-| Sends | to a blocked agent, one fixed line: "Continue where you left off — unless you already did after the limit reset; then ignore this message."; to an agent waiting through `paseo-notify`, why nobody resumes the agent it waits for, with up to 200 characters of the limit message |
+| Sends | to a blocked agent, one fixed line: "Continue where you left off — unless you already did after the limit reset; then ignore this message."; to an agent waiting through `paseo-notify`, why nobody resumes the agent it waits for, with up to 200 characters of the limit message, sent the way `paseo-notify` sends |
 
 It never sends to an agent that was taken over or archived (`paseo send` would unarchive it), and it sends with
 `--behavior steer`, so a turn someone started in the meantime is not interrupted. `--reload` restarts the agent's
@@ -73,9 +73,9 @@ transcript shows background tasks.
 | --- | --- |
 | Reads | `paseo inspect` of both agents; agent records; once the agent stops, its last message (from the Claude Code transcript, else `paseo logs`) and the last megabyte of its transcript, to see whether background tasks are still out |
 | Writes | `~/.paseo-notify.log` (created with mode 600); `~/.paseo/notify/<agent>--<caller>` when the agent stopped on a usage limit; `~/.paseo/notify/locks/<agent>--<caller>`, an empty lock file that exists while the watch runs |
-| Runs | one detached background process that blocks in `paseo wait` (at most seven days; while background tasks are out it checks once a minute, for at most three hours), then `paseo inspect`, `paseo logs` and `paseo send` |
+| Runs | one detached background process that blocks in `paseo wait` (at most seven days; while background tasks are out it checks once a minute, for at most three hours), then `paseo inspect`, `paseo logs` and `paseo send` with `PASEO_AGENT_ID` set to the watched agent, which paseo takes as the sender (if paseo refuses that, once more without it) |
 | Network | none of its own |
-| Sends | one message into the caller's conversation: the agent's id, title and status and up to 3 000 characters of its last activity. From there it goes to the caller's model provider with the rest of that conversation. Never to an archived caller |
+| Sends | one message into the caller's conversation, as an agent message from the watched agent: the agent's id, title and status and up to 3 000 characters of its last activity. From there it goes to the caller's model provider with the rest of that conversation. Never to an archived caller |
 
 ### `paseo-title`
 

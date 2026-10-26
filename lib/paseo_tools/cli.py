@@ -46,12 +46,14 @@ def run(
     timeout: float = 60,
     cwd: str | os.PathLike[str] | None = None,
     input: str | None = None,
+    env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run `argv` in text mode with captured output and never raise.
 
     A missing binary gives returncode 127, a timeout 124 and any other failure to start (for example a file
     that is not executable) 126; the reason is in `stderr`. Undecodable output is replaced, not raised.
-    Without `input`, stdin is closed so the child never waits for a terminal.
+    Without `input`, stdin is closed so the child never waits for a terminal. `env`, if given, is the
+    child's whole environment.
     """
     try:
         # Fixed UTF-8 with replacement: cron may run with a non-UTF-8 locale, and strict decoding raises.
@@ -64,6 +66,7 @@ def run(
             timeout=timeout,
             cwd=cwd,
             input=input,
+            env=env,
             stdin=subprocess.DEVNULL if input is None else None,
             check=False,
         )
@@ -75,9 +78,11 @@ def run(
         return subprocess.CompletedProcess(argv, 126, "", str(exc))
 
 
-def paseo(*args: str, timeout: float = 60) -> subprocess.CompletedProcess[str]:
-    """Run the paseo CLI with `args`."""
-    return run([resolve("paseo"), *args], timeout=timeout)
+def paseo(
+    *args: str, timeout: float = 60, env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
+    """Run the paseo CLI with `args`, in `env` if given."""
+    return run([resolve("paseo"), *args], timeout=timeout, env=env)
 
 
 def json_out(proc: subprocess.CompletedProcess[str]) -> Any | None:
