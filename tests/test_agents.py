@@ -179,6 +179,20 @@ class TranscriptTests(AgentFiles):
         os.utime(older, (1_000_000, 1_000_000))
         self.assertEqual(agents.transcript_path(agent), newer)
 
+    def test_rotated_config_symlinked_to_the_base_is_not_scanned_twice(self) -> None:
+        # claude-rotate symlinks each account's projects/ back to ~/.claude/projects; the dedup must still
+        # find the transcript (and not glob the shared tree once per account).
+        agent = self.agent_file()
+        path = self.claude_transcript([("user", "hi")])
+        rotate = self.home / ".config" / "claude-rotate" / "configs"
+        for acct in ("acct-a", "acct-b"):
+            (rotate / acct).mkdir(parents=True)
+            (rotate / acct / "projects").symlink_to(self.home / ".claude" / "projects")
+        with mock.patch.object(agents.Path, "glob", autospec=True, side_effect=Path.glob) as spy:
+            self.assertEqual(agents.transcript_path(agent), path)
+        project_globs = [c for c in spy.call_args_list if str(c.args[1]).endswith(".jsonl")]
+        self.assertEqual(len(project_globs), 1, "the shared tree was globbed more than once")
+
     def test_claude_transcript_found_under_claude_config_dir(self) -> None:
         agent = self.agent_file()
         custom = self.home / "custom-config"

@@ -114,6 +114,10 @@ def _claude_transcript(session: str) -> Path | None:
     roots = [home / ".claude" / "projects", *home.glob(".config/claude-rotate/configs/*/projects")]
     if config := os.environ.get("CLAUDE_CONFIG_DIR"):
         roots.append(Path(config) / "projects")
+    # claude-rotate symlinks every account's projects/ back to ~/.claude/projects, so without this the same
+    # thousands-of-dirs tree is globbed once per account: millions of lstat calls, 100% CPU for a pass.
+    # Resolve to the real directory and keep each once; genuinely separate roots still stay distinct.
+    roots = list({root.resolve(): None for root in roots})
     hits = [path for root in roots for path in root.glob(f"*/{session}.jsonl")]
     return max(hits, key=_mtime, default=None)
 
