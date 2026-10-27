@@ -85,8 +85,8 @@ def account(name: str, sessions: list[str] | None, *, fable_secs: int = 3600, **
     return acc
 
 
-def rotate(*accounts: dict, chosen: str = "a") -> subprocess.CompletedProcess[str]:
-    return done(json.dumps({"chosen": chosen, "accounts": list(accounts)}))
+def rotate(*accounts: dict, chosen: str = "a", code: int = 0) -> subprocess.CompletedProcess[str]:
+    return done(json.dumps({"chosen": chosen, "accounts": list(accounts)}), code)
 
 
 def said(text: str, written: datetime) -> str:
@@ -423,6 +423,18 @@ class ResetSourceTests(WatchCase):
         self.watch(now)
         self.assertEqual(self.state()[AGENT].reset, now + timedelta(hours=2))
 
+    def test_model_limit_reset_does_not_depend_on_the_agents_dir(self) -> None:
+        """The own account's windows ignore `--dir`: a deleted cwd (exit 1) must not lose the reset."""
+        self.listing = [listed(cwd="~/gone")]
+        self.agent(FABLE_LIMIT)
+        self.replies[(*ROTATE, "--dir")] = done("", 1, "not a directory")
+        self.replies[ROTATE] = rotate(account("b", [SESSION], fable_secs=7200))
+        now = WRITTEN + minutes(5)
+        fake = self.watch(now)
+        self.assertEqual(self.state()[AGENT].reset, now + timedelta(hours=2))
+        (call,) = [call for call in fake.calls if call[1] == "status"]
+        self.assertEqual(call[1:], list(ROTATE))
+
     def test_model_limit_without_rotate_or_session_field_is_unknown(self) -> None:
         self.agent(FABLE_LIMIT)
         variants = {
@@ -544,6 +556,49 @@ class ReloadTests(WatchCase):
                 self.replies[ROTATE] = status
                 fake = self.watch(self.FAR, reload=True)
                 self.assertEqual(reloads(fake) + resumes(fake), [])
+
+    def test_reload_ignores_accounts_not_allowed_in_the_agent_dir(self) -> None:
+        for allowed, reloaded in ((False, 0), (True, 1)):  # the True pass proves the fake can reload at all
+            with self.subTest(allowed_here=allowed):
+                limit_watch.state_path().unlink(missing_ok=True)
+                self.replies[ROTATE] = rotate(
+                    account("a", [SESSION], h5_pct=100.0), account("b", [OTHER_SESSION], allowed_here=allowed)
+                )
+                fake = self.watch(self.FAR, reload=True)
+                self.assertEqual(len(reloads(fake)), reloaded)
+
+    def test_rotate_status_passes_the_expanded_agent_dir(self) -> None:
+        self.listing = [listed(cwd="~/repo")]
+        fake = self.watch(self.FAR, reload=True)
+        (call,) = [call for call in fake.calls if call[1] == "status"]
+        self.assertEqual(call[1:], ["status", "--json", "--dir", str(Path.home() / "repo")])
+        self.assertEqual(len(reloads(fake)), 1)
+
+    def test_rotate_status_without_a_dir_passes_none(self) -> None:
+        (call,) = [call for call in self.watch(self.FAR, reload=True).calls if call[1] == "status"]
+        self.assertEqual(call[1:], list(ROTATE))
+
+    def test_rotate_status_reads_json_on_exit_2(self) -> None:
+        """Exit 2 is "some allowed account needs a login or none is usable", with complete JSON."""
+        self.replies[ROTATE] = rotate(account("a", [OTHER_SESSION]), account("b", [SESSION]), code=2)
+        self.assertEqual(len(reloads(self.watch(self.FAR, reload=True))), 1)
+
+    def test_rotate_status_is_none_for_a_bad_dir_and_an_older_claude_rotate(self) -> None:
+        """Exit 1 is a bad `--dir`; an older claude-rotate dies in argparse with exit 2 and no JSON."""
+        variants = {
+            "not a directory": done("", 1, "not a directory"),
+            "unknown option --dir": done("", 2, "error: unrecognized arguments: --dir /x"),
+        }
+        for label, reply in variants.items():
+            with self.subTest(label):
+                self.replies[ROTATE] = reply
+                self.assertEqual(reloads(self.watch(self.FAR, reload=True)), [])
+
+    def test_older_claude_rotate_without_allowed_field_still_reloads(self) -> None:
+        accounts = [account("a", [OTHER_SESSION]), account("b", [SESSION])]
+        self.assertTrue(all("allowed_here" not in a for a in accounts))
+        self.replies[ROTATE] = rotate(*accounts)
+        self.assertEqual(len(reloads(self.watch(self.FAR, reload=True))), 1)
 
     def test_no_reload_when_reset_is_near(self) -> None:
         fake = self.watch(RESET - minutes(40), reload=True)

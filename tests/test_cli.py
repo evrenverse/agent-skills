@@ -76,6 +76,11 @@ class JsonOutTests(TempHome):
     def test_json_out_parses(self) -> None:
         self.assertEqual(cli.json_out(completed(0, '{"a": 1}')), {"a": 1})
 
+    def test_json_out_accepts_the_listed_exit_codes_only(self) -> None:
+        self.assertEqual(cli.json_out(completed(2, '{"a": 1}'), ok=(0, 2)), {"a": 1})
+        self.assertIsNone(cli.json_out(completed(1, '{"a": 1}'), ok=(0, 2)))
+        self.assertIsNone(cli.json_out(completed(2, '{"a": 1}')))
+
     def test_json_out_none_on_bad_json(self) -> None:
         self.assertIsNone(cli.json_out(completed(0, "not json")))
         self.assertIsNone(cli.json_out(completed(0, "")))
