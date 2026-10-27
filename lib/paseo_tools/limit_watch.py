@@ -224,7 +224,7 @@ def reset_for(
     In order: the message itself, anchored at when it was written (in the system zone), or at `now` when the
     source has no timestamps; a spend cap goes no further, a person set it and no usage window lifts it; a
     Codex limit: its exhausted usage window (`codex`, `codex_reset` for the pass); a Claude model limit: that
-    model's window on the agent's own account (`status`, `rotate_status` for the pass, per directory).
+    model's window on the agent's own account (`status`, `rotate_status` for the pass).
     """
     anchor = message.written_at.astimezone() if message.written_at else now
     if reset := limits.parse_reset(message.text, written_at=anchor):
@@ -234,7 +234,8 @@ def reset_for(
     if "codex" in _provider(agent):
         return codex()
     session = _session(agent)
-    if blocker.model and session and (found := status(agent.get("cwd"))):
+    # No directory: the own account's windows do not depend on it, and a deleted cwd would fail `--dir`.
+    if blocker.model and session and (found := status(None)):
         return scoped_reset(found, session, blocker.model, now)
     return None
 
@@ -456,7 +457,8 @@ def run_once(now: datetime, *, dry_run: bool, reload: bool) -> None:
     listing = [a for a in listing if isinstance(a, dict) and a.get("id")]
     ids = {a["id"] for a in listing}
     state = {key: e for key, e in load_state().items() if key in ids}
-    # One claude-rotate and one `paseo usage` call per pass at most, and only when an agent needs it.
+    # One `paseo usage` call per pass at most, one claude-rotate call per distinct directory (plus the plain
+    # one for model-limit resets), each only when an agent needs it.
     status, codex = functools.cache(rotate_status), functools.cache(codex_reset)
     for listed in listing:
         try:

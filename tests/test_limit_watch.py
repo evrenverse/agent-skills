@@ -423,6 +423,18 @@ class ResetSourceTests(WatchCase):
         self.watch(now)
         self.assertEqual(self.state()[AGENT].reset, now + timedelta(hours=2))
 
+    def test_model_limit_reset_does_not_depend_on_the_agents_dir(self) -> None:
+        """The own account's windows ignore `--dir`: a deleted cwd (exit 1) must not lose the reset."""
+        self.listing = [listed(cwd="~/gone")]
+        self.agent(FABLE_LIMIT)
+        self.replies[(*ROTATE, "--dir")] = done("", 1, "not a directory")
+        self.replies[ROTATE] = rotate(account("b", [SESSION], fable_secs=7200))
+        now = WRITTEN + minutes(5)
+        fake = self.watch(now)
+        self.assertEqual(self.state()[AGENT].reset, now + timedelta(hours=2))
+        (call,) = [call for call in fake.calls if call[1] == "status"]
+        self.assertEqual(call[1:], list(ROTATE))
+
     def test_model_limit_without_rotate_or_session_field_is_unknown(self) -> None:
         self.agent(FABLE_LIMIT)
         variants = {
