@@ -85,9 +85,9 @@ def paseo(
     return run([resolve("paseo"), *args], timeout=timeout, env=env)
 
 
-def json_out(proc: subprocess.CompletedProcess[str]) -> Any | None:
-    """Return the parsed stdout of `proc`, or None if it failed or did not print JSON."""
-    if proc.returncode != 0:
+def json_out(proc: subprocess.CompletedProcess[str], *, ok: tuple[int, ...] = (0,)) -> Any | None:
+    """Return the parsed stdout of `proc`, or None if it did not exit with a code in `ok` or print JSON."""
+    if proc.returncode not in ok:
         return None
     try:
         return json.loads(proc.stdout)

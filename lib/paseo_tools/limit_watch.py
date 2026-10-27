@@ -9,7 +9,8 @@ transient error is resumed at once, under the same cap. Watches paseo-notify par
 after a resume, and told why when the watcher gives up (unknown reset, retries exhausted, taken over).
 
 --reload (opt-in) restarts a Claude agent launched through claude-rotate whose reset is far away, so that
-its next process starts on another account, then resumes it at once (`may_reload`).
+its next process starts on another account, then resumes it at once (`may_reload`). Only accounts
+claude-rotate allows in the agent's working directory (`allowed_here`, `claude-rotate status --dir`) count.
 
 WHAT IT NEVER DOES
   - Read credentials, a secret store or another process's environment, call an undocumented endpoint or
@@ -165,9 +166,16 @@ def codex_reset() -> datetime | None:
     return min(resets, default=None)
 
 
-def rotate_status() -> dict | None:
-    """`claude-rotate status --json`, or None when claude-rotate is missing or fails."""
-    status = cli.json_out(cli.run([cli.resolve("claude-rotate"), "status", "--json"]))
+def rotate_status(cwd: str | None = None) -> dict | None:
+    """`claude-rotate status --json` for `cwd` (`--dir`), or None when claude-rotate is missing or fails.
+
+    Exit 2 (an allowed account needs a login, or none is usable) still prints the complete JSON. An older
+    claude-rotate rejects `--dir`: None, so nothing is reloaded.
+    """
+    argv = [cli.resolve("claude-rotate"), "status", "--json"]
+    if cwd:
+        argv += ["--dir", os.path.expanduser(cwd)]  # `paseo ls` reports the cwd `~`-abbreviated
+    status = cli.json_out(cli.run(argv), ok=(0, 2))
     return status if isinstance(status, dict) else None
 
 
@@ -208,7 +216,7 @@ def reset_for(
     blocker: Blocker,
     message: Message,
     now: datetime,
-    status: Callable[[], dict | None],
+    status: Callable[[str | None], dict | None],
     codex: Callable[[], datetime | None],
 ) -> datetime | None:
     """When the limit in `message` resets, or None when nobody can tell.
@@ -216,7 +224,7 @@ def reset_for(
     In order: the message itself, anchored at when it was written (in the system zone), or at `now` when the
     source has no timestamps; a spend cap goes no further, a person set it and no usage window lifts it; a
     Codex limit: its exhausted usage window (`codex`, `codex_reset` for the pass); a Claude model limit: that
-    model's window on the agent's own account (`status`, `rotate_status` for the pass).
+    model's window on the agent's own account (`status`, `rotate_status` for the pass, per directory).
     """
     anchor = message.written_at.astimezone() if message.written_at else now
     if reset := limits.parse_reset(message.text, written_at=anchor):
@@ -226,7 +234,7 @@ def reset_for(
     if "codex" in _provider(agent):
         return codex()
     session = _session(agent)
-    if blocker.model and session and (found := status()):
+    if blocker.model and session and (found := status(agent.get("cwd"))):
         return scoped_reset(found, session, blocker.model, now)
     return None
 
@@ -261,6 +269,7 @@ def _usable(account: dict, model: str | None) -> bool:
     return (
         account.get("status") == "ok"
         and not account.get("disabled")
+        and account.get("allowed_here") is not False  # absent in older claude-rotates: allowed
         and all(isinstance(pct, (int, float)) and pct < 100 for pct in used)
     )
 
@@ -270,7 +279,7 @@ def may_reload(
     blocker: Blocker,
     reset: datetime | None,
     now: datetime,
-    status: Callable[[], dict | None],
+    status: Callable[[str | None], dict | None],
     entry: Entry | None,
 ) -> bool:
     """Whether `--reload` may restart `agent` so that claude-rotate starts it on another account.
@@ -279,16 +288,18 @@ def may_reload(
     unknown one is never guessed at: its callers are told instead); provider claude, launched through
     claude-rotate; no background work outstanding; and a usable account to move to. An account is usable when
     claude-rotate reports its status "ok" (the others are "relogin", "rate_limited", "sub_canceled" and
-    "no_data"), it is not disabled, and neither its 5-hour, its 7-day nor the blocking model's own window is
-    used up. Knowing the agent's own account (`claude_sessions`), any other usable account will do; not
-    knowing it, the account claude-rotate launches next (`chosen`) must be usable. `status` (claude-rotate,
-    which may probe its accounts) is asked last, only when everything else holds.
+    "no_data"), it is not disabled, it is allowed in the agent's working directory (`allowed_here`; an
+    older claude-rotate does not say, then it is), and neither its 5-hour, its 7-day nor the blocking model's
+    own window is used up. Knowing the agent's own account (`claude_sessions`), any other usable account will
+    do; not knowing it, the account claude-rotate launches next in that directory (`chosen`) must be usable.
+    `status` (claude-rotate for the agent's directory, which may probe its accounts) is asked last, only when
+    everything else holds.
     """
     if not blocker.timed or (entry and entry.reloaded) or reset is None or reset - now <= RELOAD_MIN_WAIT:
         return False
     if _provider(agent) != "claude" or not _launched_through_rotate() or not _no_background_work(agent):
         return False
-    if (found := status()) is None:
+    if (found := status(agent.get("cwd"))) is None:
         return False
     own = _own_account(found, _session(agent))
     candidates = (
@@ -367,7 +378,7 @@ def _check(
     *,
     dry_run: bool,
     reload: bool,
-    status: Callable[[], dict | None],
+    status: Callable[[str | None], dict | None],
     codex: Callable[[], datetime | None],
 ) -> None:
     agent_id = listed["id"]
