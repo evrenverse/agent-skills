@@ -83,7 +83,8 @@ an explicit `provider/model` argument included: drop a `[1m]` the list does not 
    targets, so the user sees it where they are working. Capture the repo root first, before any `cd`:
    `CALLER_WS="$(git rev-parse --show-toplevel)"`.
    - **Under paseo** (`$PASEO_AGENT_ID` set): pass no `--workspace`. `paseo run` places the agent in the
-     caller's workspace by itself, as the caller's child; the spawn step detaches it.
+     caller's workspace by itself, as the caller's child; the spawn step detaches it. Never
+     `env -u PASEO_AGENT_ID` instead: without a caller, paseo 0.13 mints a throwaway workspace per agent.
    - **Outside paseo:** look the workspace up by `CALLER_WS`; none → STOP and tell the user. Never spawn
      without one — `paseo run` would mint a throwaway workspace that is not the user's.
 
@@ -260,6 +261,7 @@ back; leave the report with its work (a TODO, protocol or commit), or tell the u
 
 | Mistake | Fix |
 |---|---|
+| `env -u PASEO_AGENT_ID` to spawn without a parent | Since paseo 0.13 a run with neither a caller nor `$PASEO_WORKSPACE_ID` mints a throwaway workspace per agent. Keep the variable, spawn, then `paseo agent detach` |
 | Prefix in `--model` (`--provider claude --model 'claude/…'`) | Pass ONE `--provider 'claude/claude-opus-5-5'`; never put `provider/` in `--model` |
 | `claude/claude-opus-5-5[1m]` | The plain `claude/claude-opus-5-5` is the 1M model; the suffix only hides the model and thinking in the app until the first turn ends |
 | Unquoted `provider/model` | Single-quote it; a `[1m]` in another model's id globs in zsh |
