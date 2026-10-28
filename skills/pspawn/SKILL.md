@@ -154,6 +154,7 @@ The agent starts with nothing but this text and the repo. It cannot see this con
 
 | Mistake | Fix |
 |---|---|
+| `env -u PASEO_AGENT_ID` to spawn without a parent | Since paseo 0.13 a run with neither a caller nor `$PASEO_WORKSPACE_ID` mints a throwaway workspace per agent. Keep the variable, spawn, then `paseo agent detach` |
 | No `paseo agent detach` after a spawn under paseo | Archiving this session would archive the agent mid-task. Detach, then check `ParentAgentId: null` |
 | `--workspace` omitted outside paseo | Look it up by the repo root (step 2); a throwaway workspace is not the user's |
 | Editing `~/.paseo/projects/workspaces.json` to revive an archived workspace | Never — the daemon overwrites hand edits. Stop and tell the user |
