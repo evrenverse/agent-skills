@@ -125,12 +125,13 @@ there is no separate review leg. When every plan task is implemented and review-
 discipline (its scoped tests green, the whole-branch review done), finish the branch yourself — do
 NOT present the merge/PR/keep/discard menu, just execute:
 1. Run `superpowers:finishing-a-development-branch` and choose **Merge back to `{BASE}` locally**:
-   `{BASE}` is the base, whatever the skill guesses. The merge happens in the checkout where `{BASE}`
-   is checked out (`git worktree list`; the primary checkout for main); never check `{BASE}` out
-   anywhere else. If no checkout has it, merge `{BASE}` into your branch and move `{BASE}` forward
-   from your worktree with `git fetch . HEAD:{BASE}`. Follow the skill with the adaptations of the
+   `{BASE}` is the base, whatever the skill guesses. Follow the skill with the adaptations of the
    repo's implementer section (which check replaces the skill's "full test suite", where the merge
-   happens, what to do when `{BASE}` moved).
+   happens, what to do when `{BASE}` moved); they win over the rest of this step. Where that section
+   names no place for the merge, it happens in the checkout where `{BASE}` is checked out
+   (`git worktree list`; the primary checkout for main); never check `{BASE}` out anywhere else. If
+   no checkout has it, merge `{BASE}` into your branch and move `{BASE}` forward from your worktree
+   with `git fetch . HEAD:{BASE}`.
 2. Apply any pending migration from the checkout of `{BASE}` (the PRIMARY checkout for main) with the
    repo's command; run the seed if anything under the seed changed.
 3. Push `{BASE}`, unless the repo's `AGENTS.md` forbids pushing. The verification the report cites is the
