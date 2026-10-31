@@ -1,9 +1,10 @@
-# Impl kickoff template (implement the plan, then merge to main)
+# Impl kickoff template (implement the plan, then merge it into its base branch)
 
 Placeholders (filled by the /phandoff SKILL): `{TOPIC}` `{SPEC_PATH}` `{PLAN_PATH}` `{CROSS_REPO}`
 `{TRANSCRIPT}` `{TRANSCRIPT_PATH}` `{WORKDIR}` `{CALLER_REPO}` `{MODE}` (`sdd`, `native` or `auto`)
 `{SKILLS_ROOT}` (absolute path of the plugin's `skills/` directory on this machine) `{LANGUAGE}` (the
-language of the planning conversation). Keep the body free of model names: the execution skill chooses
+language of the planning conversation) `{BASE}` (the base branch: the branch the plan's checkout is on,
+`main` in the common case). Keep the body free of model names: the execution skill chooses
 every subagent's model.
 
 `{WORKDIR}` = absolute path of the plan's repo (`PLAN_REPO_ROOT`). `{CALLER_REPO}` = absolute path
@@ -41,9 +42,10 @@ directory explicitly to every subagent you spawn — they inherit the same wrong
 
 ---
 
-}You are implementing "{TOPIC}". A finished spec and plan are committed on main. Implement the whole
-plan end-to-end, fully autonomously. When the plan is fully implemented and self-reviewed, finish
-the branch by merging to main locally yourself (see "Finish the branch" below).
+}You are implementing "{TOPIC}". A finished spec and plan are committed on `{BASE}`, your base
+branch. Implement the whole plan end-to-end, fully autonomously. When the plan is fully implemented
+and self-reviewed, finish the branch by merging it into `{BASE}` locally yourself (see "Finish the
+branch" below).
 
 ## Study first — before any code
 1. Read the spec COMPLETELY: {SPEC_PATH}
@@ -61,13 +63,14 @@ On contradictions the spec wins; note the divergence in your final report.
 
 ## Workspace
 Create an isolated worktree exactly as the repo's rules mandate (a worktree script where the repo
-has one, otherwise `superpowers:using-git-worktrees`) — never work on main, never branch in the
-primary checkout. Push the branch right after creating it (`git push -u origin HEAD`) and after
-every task commit: other developers see on `git branch -r` what is being built, and nothing is lost
-if this machine dies mid-plan. **Where the repo's `AGENTS.md` forbids pushing, never push**: commit
-locally only and skip every push step of this kickoff, step 3 of the finish included; you run
-without permission prompts, so nothing asks before a push. {CROSS_REPO: This plan touches both
-repos — create the paired worktree with the SAME name in the sibling repo BEFORE editing it.}
+has one, otherwise `superpowers:using-git-worktrees`), branching from `{BASE}` — never work on
+`{BASE}` or main directly, never branch in the primary checkout. Push the branch right after
+creating it (`git push -u origin HEAD`) and after every task commit: other developers see on
+`git branch -r` what is being built, and nothing is lost if this machine dies mid-plan. **Where the
+repo's `AGENTS.md` forbids pushing, never push**: commit locally only and skip every push step of
+this kickoff, step 3 of the finish included; you run without permission prompts, so nothing asks
+before a push. {CROSS_REPO: This plan touches both repos — create the paired worktree with the
+SAME name in the sibling repo BEFORE editing it.}
 
 ## Waiting — binding
 On Claude Code (this overrides the SDD skill's "bounded stretches" advice): dispatch every
@@ -111,26 +114,31 @@ minutes; Antigravity: subagents through `invoke_subagent`, fix rounds through `s
 
 ## Database ordering (critical — only if the plan adds migrations or seeds)
 Migration/seed changes are FILES ONLY during implementation — NEVER apply migrations or run seeds
-mid-implementation. You apply them yourself AFTER you merge to main (see "Finish the branch"), from
-the PRIMARY checkout, with the repo's migration command; check first whether a parallel branch
-landed a sibling migration (the repo's implementer section says how) and resolve that before
-applying.
+mid-implementation. You apply them yourself AFTER you merge into `{BASE}` (see "Finish the branch"),
+from the checkout where `{BASE}` is checked out (the PRIMARY checkout for main), with the repo's
+migration command; check first whether a parallel branch landed a sibling migration (the repo's
+implementer section says how) and resolve that before applying.
 
-## Finish the branch — merge to main locally
+## Finish the branch — merge into `{BASE}` locally
 The chosen skill's built-in reviews ARE the review of this work;
 there is no separate review leg. When every plan task is implemented and review-approved by that
 discipline (its scoped tests green, the whole-branch review done), finish the branch yourself — do
 NOT present the merge/PR/keep/discard menu, just execute:
-1. Run `superpowers:finishing-a-development-branch` and choose **Merge back to main locally**;
-   follow it with the adaptations of the repo's implementer section (which check replaces the
-   skill's "full test suite", where the merge happens, what to do when main moved).
-2. Apply any pending migration from the PRIMARY checkout with the repo's command; run the seed if
-   anything under the seed changed.
-3. Push main, unless the repo's `AGENTS.md` forbids pushing. The verification the report cites is the
+1. Run `superpowers:finishing-a-development-branch` and choose **Merge back to `{BASE}` locally**:
+   `{BASE}` is the base, whatever the skill guesses. The merge happens in the checkout where `{BASE}`
+   is checked out (`git worktree list`; the primary checkout for main); never check `{BASE}` out
+   anywhere else. If no checkout has it, merge `{BASE}` into your branch and move `{BASE}` forward
+   from your worktree with `git fetch . HEAD:{BASE}`. Follow the skill with the adaptations of the
+   repo's implementer section (which check replaces the skill's "full test suite", where the merge
+   happens, what to do when `{BASE}` moved).
+2. Apply any pending migration from the checkout of `{BASE}` (the PRIMARY checkout for main) with the
+   repo's command; run the seed if anything under the seed changed.
+3. Push `{BASE}`, unless the repo's `AGENTS.md` forbids pushing. The verification the report cites is the
    proof the repo's implementer section names (e.g. the last line of the check on the merged result,
    exit 0). "Green" without that proof counts as not run.
 4. Clean up the worktree and delete the branch.{CROSS_REPO: Do the merge + migration + cleanup in
-   BOTH repos with the paired branch name.}
+   BOTH repos with the paired branch name; in the sibling repo the base is the branch its primary
+   checkout is on.}
 
 Then measure the run: `python3 {SKILLS_ROOT}/pprofile/pprofile.py $PASEO_AGENT_ID` prints the
 rows the report needs (API calls, cache read, gaps, polled calls, whole-file reads, subagent counts).

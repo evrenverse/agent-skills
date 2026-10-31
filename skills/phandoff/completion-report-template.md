@@ -23,12 +23,12 @@
 
 | Metric | Value |
 |---|---|
-| Outcome | {OUTCOME} · {`main` <old> → <new>, pushed} |
+| Outcome | {OUTCOME} · {`<base branch>` <old> → <new>, pushed} |
 | Open for you | {each decision or action that needs the user, as **ID:** a few words · …; else "—"} |
 | Not verified | {what was not verified, and the biggest open risk; else "—"} |
 | Test evidence | {the proof the repo's implementer section names — e.g. the last line of the check on the merged result, exit 0} |
 | E2E run | {local e2e specs run IN ADDITION to the check, with counts; else "—"; never a CI run against the branch} |
-| Migration | {per database: applied count, run from the primary checkout · seed ran or unchanged; else "—"} |
+| Migration | {per database: applied count, run from the base branch's checkout · seed ran or unchanged; else "—"} |
 | Tasks · Findings | {N/Y} · {found / fixed / escalated} |
 | TODOs | {closed of the plan's list, else "—"} · {N new (below)} |
 | **Run** | |
