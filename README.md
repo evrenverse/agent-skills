@@ -296,10 +296,10 @@ only at the text of its command line.
 
 ## Security
 
-Spawned agents run without permission prompts by team default, and the `phandoff` implementer merges into `main` and
-pushes. `paseo-title` sends about 2 000 characters of each agent's opening conversation to Anthropic, whichever
-provider the agent runs on. `paseo-limit-watch`, `paseo-notify` and `test-queue` open no network connection of their
-own. Once you create its configuration file, the plugin's `test-queue` hook rewrites heavy Bash commands in
+Spawned agents run without permission prompts by team default, and the `phandoff` implementer merges into its base
+branch (`main`, or the branch the planning session works on) and pushes. `paseo-title` sends about 2 000 characters
+of each agent's opening conversation to Anthropic, whichever provider the agent runs on. `paseo-limit-watch`,
+`paseo-notify` and `test-queue` open no network connection of their own. Once you create its configuration file, the plugin's `test-queue` hook rewrites heavy Bash commands in
 `bypassPermissions` sessions, unless a Bash deny or ask rule of the session may match the command (see
 [test-queue](#test-queue)). [SECURITY.md](SECURITY.md) lists, per skill and tool, what it reads, writes, runs and
 sends, how to restrict spawned agents, and how to report a vulnerability.

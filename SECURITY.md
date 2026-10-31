@@ -19,7 +19,7 @@ mode approves on its own.
 
 | Skill | Starts | Mode | Push and merge |
 | --- | --- | --- | --- |
-| `phandoff` | one implementer, detached from the calling session | `bypassPermissions` (Claude, the default; also a Claude Code provider the team configured), `full-access` (Codex, Antigravity) | Told to push its branch after every task commit, merge into `main` and push `main`; where the repository's `AGENTS.md` forbids pushing, it merges locally and pushes nothing |
+| `phandoff` | one implementer, detached from the calling session | `bypassPermissions` (Claude, the default; also a Claude Code provider the team configured), `full-access` (Codex, Antigravity) | Told to push its branch after every task commit, merge into its base branch (`main`, or the branch the planning session works on) and push that branch; where the repository's `AGENTS.md` forbids pushing, it merges locally and pushes nothing |
 | `pspawn` | one agent, detached | `bypassPermissions` (Claude), `full-access` (Codex) | No instruction to push or merge, and nothing technical stops it |
 | `padvisor` | one agent, a child of the calling session | `full-access` (Codex, the default), `bypassPermissions` (Claude) | Told to change no file; that is an instruction, not a mode |
 | `pcommittee` | two agents, children of the calling session | `bypassPermissions` (Claude member), `full-access` (Codex member) | Told to change no file; that is an instruction, not a mode |

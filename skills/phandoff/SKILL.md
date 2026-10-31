@@ -1,23 +1,24 @@
 ---
 name: phandoff
-description: "Use when planning is finished and a committed spec + plan should go to an autonomous implementer that implements the whole plan and merges to main itself. Triggers on /phandoff, 'hand this to an implementer', 'have this implemented', 'handoff'. Provider-agnostic: an explicit provider/model or a numbered option (2 to 4, listed in the skill) overrides the default, Claude Opus at thinking xhigh in bypassPermissions."
+description: "Use when planning is finished and a committed spec + plan should go to an autonomous implementer that implements the whole plan and merges it into its base branch (main, or the branch the planning session works on) itself. Triggers on /phandoff, 'hand this to an implementer', 'have this implemented', 'handoff'. Provider-agnostic: an explicit provider/model or a numbered option (2 to 4, listed in the skill) overrides the default, Claude Opus at thinking xhigh in bypassPermissions."
 ---
 
 # phandoff (autonomous implementer handoff)
 
 ## Overview
 
-Spawn an autonomous implementer for a committed spec + plan. It implements the whole plan and merges to
-main itself — the built-in reviews of the chosen superpowers execution skill ARE the review, so no
+Spawn an autonomous implementer for a committed spec + plan. It implements the whole plan and merges
+it into its base branch itself: the branch the planning session works on, `main` in the common case
+(pre-flight step 3). The built-in reviews of the chosen superpowers execution skill ARE the review, so no
 separate gate exists. (That skill owns the review structure — do not restate or pin its stages here; it
 changes between superpowers versions.)
 
 **What the implementer may do.** It runs detached and unattended with permission prompts off
 (`bypassPermissions` on Claude Code, `full-access` on Codex and Antigravity): it can run any command, edit
-any file the user can, create branches and worktrees, push, and merge to main. Its kickoff tells it to
-push its branch after every task commit. A repository that wants no pushes says so in its `AGENTS.md`; the
-kickoff makes the implementer obey that rule. Claude Code `permissions.deny` rules still apply in
-`bypassPermissions`. The permission choice is a team default (see pre-flight step 6).
+any file the user can, create branches and worktrees, push, and merge into its base branch. Its kickoff
+tells it to push its branch after every task commit. A repository that wants no pushes says so in its
+`AGENTS.md`; the kickoff makes the implementer obey that rule. Claude Code `permissions.deny` rules still
+apply in `bypassPermissions`. The permission choice is a team default (see pre-flight step 6).
 
 ## Invocation
 
@@ -107,11 +108,19 @@ an explicit `provider/model` argument included: drop a `[1m]` the list does not 
 2. **Detect cross-repo scope:** the plan names files in another repository than `PLAN_REPO_ROOT`. Then
    `{CROSS_REPO}` is non-empty in the kickoff (see Spawn), which makes the implementer read the other
    repository's `AGENTS.md`, create a paired worktree and finish the work in both.
-3. **Commit your own uncommitted work:** if the repo — or, for cross-repo plans, the sibling repo — has
-   uncommitted changes of THIS session (the spec, the plan, their docs), commit them NOW (atomic
-   conventional commits, explicit `git add <paths>`, skip transient/lock files). Never stage another
-   session's files: other sessions may work in the same checkout; name them in the report instead. The new
-   agent branches from `main` HEAD, and the plan must be on it.
+3. **Resolve the base branch, then commit your own uncommitted work.** The base `{BASE}` is the branch the
+   plan's checkout is on: `git -C <PLAN_REPO_ROOT> branch --show-current`. That is `main` in the common
+   case, and the implementer behaves as it always did; it is a topic branch when the planning session works
+   on one (a repository whose `main` takes pull requests only, for example), and the implementer then
+   branches from that branch and merges back into it. A detached HEAD → STOP and tell the user. When the
+   repo's `AGENTS.md` forbids merging into `{BASE}` and its implementer section in `CONTRIBUTING.md` names
+   no other finish (such as a pull request), STOP and tell the user what the repo asks for instead (for
+   example: the spec and plan on a branch of their own, handed off from there). Then, if the repo — or,
+   for cross-repo plans, the sibling repo — has uncommitted changes of THIS session (the spec, the plan,
+   their docs), commit them NOW (atomic conventional commits, explicit `git add <paths>`, skip
+   transient/lock files). Never stage another session's files: other sessions may work in the same
+   checkout; name them in the report instead. The new agent branches from `{BASE}` HEAD, and the plan must
+   be on it.
 4. **Check for worktree/branch name collisions** (`git worktree list`) in every affected repo.
 5. **Resolve the planning-session transcript** so the new agent can look up design rationale. Under
    paseo, `python3 <skills root>/pagent/pagent.py "$PASEO_AGENT_ID"` prints it on its `transcript` line
@@ -146,8 +155,8 @@ an explicit `provider/model` argument included: drop a `[1m]` the list does not 
    offers; read them from there, never from memory. NEVER `paseo restart` to fix a provider snapshot — it
    tree-kills every running agent. Report the situation and let the user decide.
 8. **Overlap warning:** read the plan's header line `**Touches:**` (the areas the plan touches, as paths).
-   Then `git fetch`, and for every other plan on main whose `**Touches:**` line shares a path prefix with
-   it, ask whether an implementer still works on it:
+   Then `git fetch`, and for every other plan on `{BASE}` whose `**Touches:**` line shares a path prefix
+   with it, ask whether an implementer still works on it:
    `paseo ls -g --label "plan=<that plan's absolute path>" -q` (labels are a filter only — neither
    `paseo ls --json` nor `paseo inspect` prints them). Any open implementer on a shared path prefix is a
    WARNING line in the report, naming both plans and the shared area — never a stop; two plans in the same
@@ -176,6 +185,7 @@ occurrence; a `{NAME: …}` block is emitted only when `NAME` is non-empty:
 - `{LANGUAGE}` — the language of the planning conversation (for example `German`), taken from the
   user's messages in this session; the implementer writes its status messages and the completion report
   in it. English if the conversation was in English.
+- `{BASE}` — the base branch of pre-flight step 3, `main` in the common case.
 
 Then:
 
@@ -236,7 +246,7 @@ the directory instruction made explicit — before it commits anything anywhere.
 
 Report: impl agent ID, title, impl model/thinking, which spec+plan were resolved, the workspace it landed
 in (= the caller's current workspace), the overlap warning from pre-flight step 8 if any, and that the
-agent implements and merges to main itself. No attach/watch hints.
+agent implements and merges into `{BASE}` itself (naming the branch). No attach/watch hints.
 
 **If this session follows the implementer** (a repo rule says so, or the user asks): `paseo-notify
 <impl-id>`, then end your turn. One message arrives when it finishes, errors or needs a permission; a
@@ -270,7 +280,8 @@ back; leave the report with its work (a TODO, protocol or commit), or tell the u
 | Option 3 spawned on `claude-gemini/*` (or Option 2 on `antigravity/*`) | Same model, different harness: Option 2 = Claude Code via the configured provider, Option 3 = agy |
 | paseo rejects the model or thinking id | Check `paseo provider models <provider> --thinking`, report what is actually offered, and ask — never silently spawn with a lower tier or a different model |
 | Interrupting a running implementer with a follow-up | `paseo send <id> "<text>" --behavior steer --no-wait`; steering can fall back to interruption when the provider cannot accept it |
-| Impl agent NOT merging | The implementer MUST finish the branch and merge to main itself; there is no separate review leg to hand it to |
+| Impl agent NOT merging | The implementer MUST finish the branch and merge into its base branch itself (or finish the way the repo's implementer section says); there is no separate review leg to hand it to |
+| Handing off from `main` where the repo forbids merging into it and names no other finish | Stop before spawning (pre-flight step 3); the spec and plan go on a branch of their own, and the handoff runs from there with that branch as `{BASE}` |
 | No `paseo agent detach` after spawning under paseo → archiving the calling session KILLS the running implementer | Detach right after the spawn; verify `ParentAgentId: null` |
 | Spawning before this session's spec and plan are committed | Commit them first, by named paths only (pre-flight step 3) |
 | Editing `~/.paseo/projects/workspaces.json` or an agent record to fix placement | Never — the daemon overwrites hand edits. An archived workspace makes `--workspace` fail: stop and tell the user; never `paseo restart` |
